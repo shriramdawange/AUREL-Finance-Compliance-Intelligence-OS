@@ -81,6 +81,7 @@ Deno.serve(async (request) => {
     const resource = event.resource;
     const relatedOrderId = resource?.supplementary_data?.related_ids?.order_id ?? resource?.related_ids?.order_id ?? null;
     const intentCandidate = resource?.custom_id ?? (String(resource?.invoice_id ?? "").startsWith("AUREL-") ? String(resource.invoice_id).slice(6) : null);
+    const relatedCaptureId = resource?.supplementary_data?.related_ids?.capture_id ?? resource?.parent_payment ?? null;
     let intent: any = null;
     if (intentCandidate && /^[0-9a-f-]{36}$/i.test(String(intentCandidate))) {
       const { data } = await admin.from("payment_intents").select("*").eq("id", String(intentCandidate)).maybeSingle();
@@ -92,6 +93,10 @@ Deno.serve(async (request) => {
     }
     if (!intent && resource?.id) {
       const { data } = await admin.from("payment_intents").select("*").eq("provider_capture_id", String(resource.id)).maybeSingle();
+      intent = data;
+    }
+    if (!intent && relatedCaptureId) {
+      const { data } = await admin.from("payment_intents").select("*").eq("provider_capture_id", String(relatedCaptureId)).maybeSingle();
       intent = data;
     }
 
@@ -136,7 +141,6 @@ Deno.serve(async (request) => {
     const feeMinor = isCapture ? decimalToMinor(resource?.seller_receivable_breakdown?.paypal_fee?.value ?? "0") : 0;
     if (feeMinor > grossMinor) throw new Error("PayPal fee exceeds gross transaction amount.");
     const netMinor = grossMinor - feeMinor;
-    const relatedCaptureId = resource?.supplementary_data?.related_ids?.capture_id ?? resource?.parent_payment ?? null;
     let originalEventId: string | null = null;
     if (isRefund || isReversal) {
       if (relatedCaptureId) {
