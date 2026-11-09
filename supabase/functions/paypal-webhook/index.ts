@@ -153,12 +153,16 @@ Deno.serve(async (request) => {
 
     const type = String(event.event_type);
     if (type === "PAYMENT.CAPTURE.PENDING") {
-      await admin.from("payment_intents").update({ lifecycle_status: "approval_pending" }).eq("id", intent.id);
+      const { error: pendingError } = await admin.from("payment_intents").update({ lifecycle_status: "approval_pending" })
+        .eq("id", intent.id).in("lifecycle_status", ["created","approval_pending","approved"]);
+      if (pendingError) throw new Error("Could not update pending payment intent: " + pendingError.message);
       await admin.from("provider_webhook_events").update({ processing_status: "processed", processing_started_at: null, processing_error: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, processed: true });
     }
     if (type === "PAYMENT.CAPTURE.DENIED") {
-      await admin.from("payment_intents").update({ lifecycle_status: "failed" }).eq("id", intent.id);
+      const { error: deniedError } = await admin.from("payment_intents").update({ lifecycle_status: "failed" })
+        .eq("id", intent.id).in("lifecycle_status", ["created","approval_pending","approved"]);
+      if (deniedError) throw new Error("Could not update denied payment intent: " + deniedError.message);
       await admin.from("provider_webhook_events").update({ processing_status: "processed", processing_started_at: null, processing_error: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, processed: true });
     }
@@ -172,9 +176,14 @@ Deno.serve(async (request) => {
     }
 
     const amountObject = resource?.amount ?? resource?.seller_receivable_breakdown?.gross_amount;
-    const currency = String(amountObject?.currency_code ?? intent.currency_code).toUpperCase();
+    if (!amountObject?.currency_code || amountObject?.value === undefined || amountObject?.value === null) {
+      throw new Error("PayPal event is missing an explicit gross amount or currency.");
+    }
+    const currency = String(amountObject.currency_code).toUpperCase();
     if (currency !== String(intent.currency_code).toUpperCase()) throw new Error("Webhook currency does not match the stored payment intent.");
-    const grossMinor = decimalToMinor(amountObject?.value);
+    const grossMinor = decimalToMinor(amountObject.value);
+    if (grossMinor <= 0) throw new Error("PayPal event gross amount must be positive.");
+    if (!resource?.id) throw new Error("PayPal event is missing its provider resource identifier.");
     if (isCapture && grossMinor !== Number(intent.amount_minor)) {
       throw new Error("PayPal capture amount does not match the stored payment intent amount.");
     }
@@ -183,12 +192,13 @@ Deno.serve(async (request) => {
     const netMinor = grossMinor - feeMinor;
     let originalEventId: string | null = null;
     if (isRefund || isReversal) {
-      if (relatedCaptureId) {
-        const { data: original } = await admin.from("financial_events").select("id,gross_minor")
-          .eq("organization_id", intent.organization_id).eq("source_system", "paypal")
-          .eq("provider_event_id", "capture:" + String(relatedCaptureId)).maybeSingle();
-        originalEventId = original?.id ?? null;
-      }
+      if (!relatedCaptureId) throw new Error("Refund/reversal event does not identify its original PayPal capture.");
+      const { data: original, error: originalLookupError } = await admin.from("financial_events").select("id,gross_minor")
+        .eq("organization_id", intent.organization_id).eq("source_system", "paypal")
+        .eq("provider_event_id", "capture:" + String(relatedCaptureId)).maybeSingle();
+      if (originalLookupError) throw new Error("Could not load the original PayPal capture: " + originalLookupError.message);
+      originalEventId = original?.id ?? null;
+      if (!originalEventId) throw new Error("Original PayPal capture is not in the AUREL ledger yet; retry this webhook after capture processing.");
     }
 
     let originalCaptureMinor = Number(intent.amount_minor);
@@ -212,10 +222,10 @@ Deno.serve(async (request) => {
     const category = isCapture ? "customer_receipt" : isRefund ? "refund" : "reversal";
     const lifecycle = isCapture ? "paid" : isRefund ? "refunded" : "reversed";
     const nextIntentStatus = isCapture
-      ? "captured"
+      ? (["partially_refunded","refunded","reversed"].includes(intent.lifecycle_status) ? intent.lifecycle_status : "captured")
       : isReversal
         ? "reversed"
-        : (priorRefundMinor + grossMinor >= originalCaptureMinor ? "refunded" : "partially_refunded");
+        : (intent.lifecycle_status === "reversed" ? "reversed" : (priorRefundMinor + grossMinor >= originalCaptureMinor ? "refunded" : "partially_refunded"));
     const { error: financialEventError } = await admin.from("financial_events").insert({
       organization_id: intent.organization_id,
       client_id: intent.client_id,
