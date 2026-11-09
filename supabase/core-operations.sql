@@ -261,10 +261,11 @@ begin
   where id = p_journal_entry_id
     and organization_id = p_organization_id
     and lifecycle_status = 'pending_review'
+    and created_by is distinct from (select auth.uid())
   returning id into changed_id;
 
   if changed_id is null then
-    raise exception 'Journal not found or is not awaiting review.';
+    raise exception 'Journal not found, not awaiting review, or cannot be approved by its preparer.';
   end if;
 
   return changed_id;
@@ -330,6 +331,9 @@ begin
   if p_as_of_date is null then
     raise exception 'An as-of date is required.';
   end if;
+  if not exists (select 1 from public.clients c where c.id = p_client_id and c.organization_id = p_organization_id) then
+    raise exception 'The client does not belong to this organisation.';
+  end if;
 
   return query
   select
@@ -384,6 +388,9 @@ begin
   end if;
   if p_period_start is null or p_period_end is null or p_period_start > p_period_end then
     raise exception 'A valid reporting period is required.';
+  end if;
+  if not exists (select 1 from public.clients c where c.id = p_client_id and c.organization_id = p_organization_id) then
+    raise exception 'The client does not belong to this organisation.';
   end if;
 
   return query
@@ -450,7 +457,7 @@ begin
   with account_scope as (
     select a.id, a.account_code, a.account_name, a.account_group, a.normal_balance
     from public.accounts a
-    where a.organization_id = p_organization_id and a.client_id = p_client_id and a.is_active
+    where a.organization_id = p_organization_id and a.client_id = p_client_id
   ),
   opening as (
     select
@@ -542,7 +549,7 @@ begin
         and j.client_id = p_client_id and j.lifecycle_status = 'posted' and j.journal_date <= p_as_of_date
     )
   where a.organization_id = p_organization_id and a.client_id = p_client_id
-    and a.is_active and a.account_group in ('asset','liability','equity')
+    and a.account_group in ('asset','liability','equity')
   group by a.id, a.account_code, a.account_name, a.account_group
   having coalesce(sum(l.debit_minor),0) <> coalesce(sum(l.credit_minor),0)
 
@@ -558,7 +565,7 @@ begin
   join public.journal_lines l on l.account_id = a.id and l.organization_id = a.organization_id
   join public.journal_entries j on j.id = l.journal_entry_id and j.organization_id = l.organization_id
   where a.organization_id = p_organization_id and a.client_id = p_client_id
-    and a.is_active and a.account_group in ('income','expense')
+    and a.account_group in ('income','expense')
     and j.lifecycle_status = 'posted' and j.journal_date between fy_start_date and p_as_of_date
   having coalesce(sum(case
     when a.account_group = 'income' then l.credit_minor - l.debit_minor
