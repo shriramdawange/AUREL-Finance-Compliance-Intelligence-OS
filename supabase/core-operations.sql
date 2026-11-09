@@ -568,7 +568,8 @@ begin
       raise exception 'Every row must contain a narration between 1 and 1000 characters.';
     end if;
 
-    if debit_text !~ '^[0-9]{1,18}' || '$' or credit_text !~ '^[0-9]{1,18}' || '$' then
+    if length(debit_text) < 1 or length(debit_text) > 18 or debit_text ~ '[^0-9]'
+       or length(credit_text) < 1 or length(credit_text) > 18 or credit_text ~ '[^0-9]' then
       raise exception 'Debit and credit amounts must be non-negative integer paise.';
     end if;
     debit_value := debit_text::bigint;
