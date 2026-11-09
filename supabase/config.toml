@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.create-paypal-order]
 verify_jwt = true
+
+[functions.cancel-paypal-order]
+verify_jwt = true
