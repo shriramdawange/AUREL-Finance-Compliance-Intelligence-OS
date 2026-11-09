@@ -153,7 +153,7 @@ begin
   if tg_op = 'DELETE' then return old; end if;
   return new;
 end;
-$;
+$$;
 
 drop trigger if exists journal_lines_draft_only on public.journal_lines;
 create trigger journal_lines_draft_only
