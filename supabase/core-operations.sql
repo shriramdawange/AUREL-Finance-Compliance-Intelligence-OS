@@ -418,6 +418,74 @@ begin
 end;
 $$;
 
+create or replace function public.get_general_ledger(
+  p_organization_id uuid,
+  p_client_id uuid,
+  p_period_start date,
+  p_period_end date
+)
+returns table (
+  account_id uuid, account_code text, account_name text, account_group text, normal_balance text,
+  journal_line_id uuid, journal_entry_id uuid, journal_number text, journal_date date,
+  narration text, line_description text, debit_minor bigint, credit_minor bigint,
+  opening_balance_minor bigint, running_balance_minor bigint
+)
+language plpgsql
+stable
+security invoker
+set search_path = ''
+as $aurel$
+begin
+  if not private.is_org_member(p_organization_id) then
+    raise exception 'You are not a member of this organisation.';
+  end if;
+  if p_period_start is null or p_period_end is null or p_period_start > p_period_end then
+    raise exception 'A valid ledger date range is required.';
+  end if;
+  if not exists (select 1 from public.clients c where c.id = p_client_id and c.organization_id = p_organization_id) then
+    raise exception 'The client does not belong to this organisation.';
+  end if;
+
+  return query
+  with account_scope as (
+    select a.id, a.account_code, a.account_name, a.account_group, a.normal_balance
+    from public.accounts a
+    where a.organization_id = p_organization_id and a.client_id = p_client_id and a.is_active
+  ),
+  opening as (
+    select
+      a.id as account_id,
+      coalesce(sum(case when a.normal_balance = 'debit' then l.debit_minor - l.credit_minor else l.credit_minor - l.debit_minor end),0)::bigint as opening_minor
+    from account_scope a
+    left join public.journal_lines l on l.account_id = a.id and l.organization_id = p_organization_id
+    left join public.journal_entries j on j.id = l.journal_entry_id and j.organization_id = p_organization_id
+      and j.client_id = p_client_id and j.lifecycle_status = 'posted' and j.journal_date < p_period_start
+    where l.id is null or j.id is not null
+    group by a.id
+  ),
+  activity as (
+    select
+      a.id as account_id, a.account_code, a.account_name, a.account_group, a.normal_balance,
+      l.id as journal_line_id, j.id as journal_entry_id, j.journal_number, j.journal_date,
+      j.narration, l.description as line_description, l.debit_minor, l.credit_minor,
+      case when a.normal_balance = 'debit' then l.debit_minor - l.credit_minor else l.credit_minor - l.debit_minor end as signed_movement,
+      l.line_number, l.created_at
+    from account_scope a
+    join public.journal_lines l on l.account_id = a.id and l.organization_id = p_organization_id
+    join public.journal_entries j on j.id = l.journal_entry_id and j.organization_id = p_organization_id
+    where j.client_id = p_client_id and j.lifecycle_status = 'posted'
+      and j.journal_date between p_period_start and p_period_end
+  )
+  select
+    a.account_id, a.account_code, a.account_name, a.account_group, a.normal_balance,
+    a.journal_line_id, a.journal_entry_id, a.journal_number, a.journal_date, a.narration, a.line_description,
+    a.debit_minor, a.credit_minor, o.opening_minor,
+    (o.opening_minor + sum(a.signed_movement) over (partition by a.account_id order by a.journal_date, a.created_at, a.line_number, a.journal_line_id rows between unbounded preceding and current row))::bigint
+  from activity a
+  join opening o on o.account_id = a.account_id
+  order by a.account_code, a.journal_date, a.created_at, a.line_number, a.journal_line_id;
+end;
+$aurel$;
 create or replace function public.get_balance_sheet(
   p_organization_id uuid,
   p_client_id uuid,
@@ -628,6 +696,7 @@ begin
 end;
 $aurel$;
 
+revoke all on function public.get_general_ledger(uuid, uuid, date, date) from public, anon;
 revoke all on function public.ensure_default_chart_of_accounts(uuid, uuid) from public, anon;
 revoke all on function public.create_journal_draft(uuid, uuid, date, text, jsonb) from public, anon;
 revoke all on function public.submit_journal_for_review(uuid, uuid) from public, anon;
@@ -638,6 +707,7 @@ revoke all on function public.get_profit_and_loss(uuid, uuid, date, date) from p
 revoke all on function public.get_balance_sheet(uuid, uuid, date) from public, anon;
 revoke all on function public.import_bank_statement_rows(uuid, uuid, uuid, uuid, jsonb) from public, anon;
 
+grant execute on function public.get_general_ledger(uuid, uuid, date, date) to authenticated;
 grant execute on function public.ensure_default_chart_of_accounts(uuid, uuid) to authenticated;
 grant execute on function public.create_journal_draft(uuid, uuid, date, text, jsonb) to authenticated;
 grant execute on function public.submit_journal_for_review(uuid, uuid) to authenticated;
