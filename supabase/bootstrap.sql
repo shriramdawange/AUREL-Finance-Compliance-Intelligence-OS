@@ -384,7 +384,7 @@ create table if not exists public.payment_intents (
   amount_minor bigint not null check (amount_minor > 0),
   currency_code char(3) not null default 'USD',
   description text not null,
-  lifecycle_status text not null default 'created' check (lifecycle_status in ('created','approval_pending','approved','captured','failed','cancelled','refunded')),
+  lifecycle_status text not null default 'created' check (lifecycle_status in ('created','approval_pending','approved','captured','partially_refunded','refunded','reversed','failed','cancelled')),
   created_by uuid not null references auth.users(id) on delete restrict,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
