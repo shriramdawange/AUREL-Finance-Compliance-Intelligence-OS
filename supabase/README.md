@@ -9,9 +9,10 @@ AUREL intentionally uses a **dedicated Supabase project**. Do not point it at ED
 - Organisation bootstrap: a signed-in user can create the first organisation and become its owner.
 - Tenant access: PostgreSQL RLS helper functions and role-scoped policies are defined in `bootstrap.sql`.
 - Document storage: a private `aurel-documents` bucket is defined. Live file upload is wired after authentication.
-- Persisted UI adapters: client master, source documents, financial event timeline, tasks and journal list are wired to Supabase.
+- Persisted UI adapters: client master, source documents, financial event timeline, tasks, journal workflow and bank statement import are wired to Supabase.
 - Accounting RPC layer: default chart-of-accounts initialisation, balanced journal draft creation, submit/review/approve/post lifecycle, Trial Balance, P&L and Balance Sheet query functions are defined in `core-operations.sql`.
 - Journal UI: connected sessions can initialise a starter chart, create a two-line balanced journal draft, submit it for review, approve it and post it. Trial Balance, P&L and Balance Sheet screens query posted journal lines.
+- Bank CSV: browser-side parsing and column mapping feed a tenant- and role-scoped idempotent import RPC. Each imported bank row is stored as statement evidence and produces a canonical cash event classified as `other` pending review (credits are not assumed to be revenue).
 - PayPal Edge Functions: sandbox order creation, capture and signed webhook verification are implemented as source code.
 - Not yet live: no AUREL-specific Supabase project has been provisioned, no schema has been applied to a remote AUREL database, and no provider secrets have been configured. Live Supabase mode will not work until these steps are completed.
 
@@ -30,7 +31,7 @@ In the new project's SQL Editor, run these files in order:
 3. `supabase/core-operations.sql`
 4. `supabase/verify-core-operations.sql`
 
-The bootstrap transaction creates tenant tables, indexes, RLS policies, private storage bucket and audit triggers. The hardening script adds double-entry journal posting validation and restricts service-only PayPal webhook payloads. The core-operations script adds invoker-rights RPCs for chart-of-accounts initialisation, atomic balanced journal creation, review/approval/posting and posted-ledger Trial Balance, P&L and Balance Sheet queries. The verification script is a non-destructive installation smoke check; it does not replace behavioural tests.
+The bootstrap transaction creates tenant tables, indexes, RLS policies, private storage bucket and audit triggers. The hardening script adds double-entry journal posting validation and restricts service-only PayPal webhook payloads. The core-operations script adds invoker-rights RPCs for chart-of-accounts initialisation, atomic balanced journal creation, review/approval/posting and posted-ledger Trial Balance, P&L and Balance Sheet queries. The core-operations script also adds idempotent bank statement row ingestion. Every bank row is stored as a statement line and emitted as an unclassified canonical financial event; it is not automatically booked to sales or expense. The verification script is a non-destructive installation smoke check; it does not replace behavioural tests.
 
 Run the bootstrap exactly once on the new empty project. Apply the next two scripts after it. Confirm the smoke check succeeds. Then run Supabase Security, Performance and Health Advisors and resolve all findings before using real client data.
 
