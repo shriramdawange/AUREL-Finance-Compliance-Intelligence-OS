@@ -13,7 +13,8 @@ AUREL is a multi-tenant finance and compliance operating system. Each organisati
 - Tenant-aware client/document/event/task queries.
 - Private document upload adapter to the `aurel-documents` bucket.
 - SQL baseline with organisation membership, role-aware RLS, core financial/event/document/accounting/tax tables, audit triggers and storage policies.
-- PayPal Edge Functions for authenticated sandbox order creation and signed webhook intake.
+- PayPal Edge Functions for authenticated sandbox order creation, capture and signed webhook intake.
+- Core accounting RPCs for chart initialisation, balanced journal draft creation, review, approval, posting, Trial Balance, P&L and Balance Sheet.
 
 **Not yet deployed**
 - No AUREL-specific Supabase project has been provisioned.
@@ -103,7 +104,7 @@ The current SQL baseline includes:
 - GST/ITC/TDS/TCS/income-tax workpapers and exceptions
 - Tasks, integrations, audit events and compensation records
 
-The baseline is committed in `supabase/bootstrap.sql`. Journal and provider event integrity controls are in `supabase/integrity-hardening.sql`.
+The baseline is committed in `supabase/bootstrap.sql`. Journal and provider event integrity controls are in `supabase/integrity-hardening.sql`. The first accounting workflows and statement queries are defined in `supabase/core-operations.sql`; use `supabase/verify-core-operations.sql` as an installation smoke check.
 
 ## 7. Document intake and OCR
 
@@ -186,15 +187,15 @@ The agent must not write arbitrary SQL, invent a ledger balance, post journals, 
 
 ## 12. Phased roadmap
 
-1. Provision dedicated Supabase project; apply schema; run Advisors and RLS tests.
-2. Complete client/document/task persistence and signed file preview.
-3. Build OCR extraction, validation and duplicate review workflow.
-4. Complete event import, bank CSV parsing and reconciliation matching.
-5. End-to-end PayPal Sandbox order/capture/refund test.
-6. Build accounting posting, trial balance, P&L, balance sheet and cash flow from validated journals.
-7. Implement GST/ITC and TDS/income-tax rule engines with workpaper versioning and reviewer checks.
-8. Implement compliance calendar, notices, archive and full audit history.
-9. Add curated metric service, forecasts and anomaly detection.
-10. Connect read-only AUREL Agent tools and build evaluation tests.
+1. Provision dedicated Supabase project; apply all SQL scripts; expose the required Data API objects; run Advisors and two-tenant RLS tests.
+2. Complete client/document/task persistence, signed file preview and a proper client/role invitation workflow.
+3. Build OCR extraction, validation, duplicate detection and human review workflow.
+4. Complete bank CSV ingestion, statement import records, idempotent canonical events and reconciliation.
+5. End-to-end PayPal Sandbox checkout/capture/refund/reversal/retry tests.
+6. Complete the accounting engine: journal multi-line editing, review controls, period locks, reversal workflows, opening balances, subledger links, account mapping and cash-flow classification.
+7. Verify statement maths, including current-year earnings and retained earnings, with control datasets.
+8. Implement GST/ITC and TDS/income-tax rule engines with versioned workpapers, source reconciliation and reviewer checks.
+9. Implement compliance calendar, notices, archive, export controls and full audit history.
+10. Add curated metric service, forecasts, anomaly detection and read-only AUREL Agent tools with evaluation tests.
 
 A module is complete only when its authorization, domain validation, provenance, deterministic calculations, tests, error handling, audit trail and operational monitoring are in place.
