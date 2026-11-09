@@ -13,7 +13,10 @@ declare
     'get_profit_and_loss(uuid,uuid,date,date)',
     'get_balance_sheet(uuid,uuid,date)',
     'get_general_ledger(uuid,uuid,date,date)',
-    'import_bank_statement_rows(uuid,uuid,uuid,uuid,jsonb)'
+    'import_bank_statement_rows(uuid,uuid,uuid,uuid,jsonb)',
+    'create_trade_document(uuid,uuid,text,text,date,date,text,text,text,text,text,numeric,bigint,numeric,text)',
+    'approve_trade_document(uuid,uuid)',
+    'issue_trade_document(uuid,uuid)'
   ];
   function_signature text;
 begin
@@ -67,7 +70,7 @@ begin
       and p.proname in (
         'ensure_default_chart_of_accounts','create_journal_draft',
         'submit_journal_for_review','approve_journal','post_approved_journal',
-        'get_trial_balance','get_profit_and_loss','get_balance_sheet','get_general_ledger','import_bank_statement_rows'
+        'get_trial_balance','get_profit_and_loss','get_balance_sheet','get_general_ledger','import_bank_statement_rows','create_trade_document','approve_trade_document','issue_trade_document'
       )
       and p.prosecdef
   ) then
@@ -89,6 +92,6 @@ where n.nspname = 'public'
   and p.proname in (
     'ensure_default_chart_of_accounts','create_journal_draft',
     'submit_journal_for_review','approve_journal','post_approved_journal',
-    'get_trial_balance','get_profit_and_loss','get_balance_sheet','import_bank_statement_rows'
+    'get_trial_balance','get_profit_and_loss','get_balance_sheet','get_general_ledger','import_bank_statement_rows','create_trade_document','approve_trade_document','issue_trade_document'
   )
 order by p.proname;
