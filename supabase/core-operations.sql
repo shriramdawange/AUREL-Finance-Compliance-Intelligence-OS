@@ -340,14 +340,16 @@ begin
   left join public.journal_lines l
     on l.account_id = a.id
    and l.organization_id = a.organization_id
-  left join public.journal_entries j
-    on j.id = l.journal_entry_id
-   and j.organization_id = l.organization_id
-   and j.lifecycle_status = 'posted'
-   and j.journal_date <= p_as_of_date
+   and exists (
+     select 1
+     from public.journal_entries j
+     where j.id = l.journal_entry_id
+       and j.organization_id = l.organization_id
+       and j.lifecycle_status = 'posted'
+       and j.journal_date <= p_as_of_date
+   )
   where a.organization_id = p_organization_id
     and a.client_id = p_client_id
-    and (l.id is null or j.id is not null)
   group by a.id, a.account_code, a.account_name, a.account_group
   order by a.account_code;
 end;
@@ -394,15 +396,17 @@ begin
   left join public.journal_lines l
     on l.account_id = a.id
    and l.organization_id = a.organization_id
-  left join public.journal_entries j
-    on j.id = l.journal_entry_id
-   and j.organization_id = l.organization_id
-   and j.lifecycle_status = 'posted'
-   and j.journal_date between p_period_start and p_period_end
+   and exists (
+     select 1
+     from public.journal_entries j
+     where j.id = l.journal_entry_id
+       and j.organization_id = l.organization_id
+       and j.lifecycle_status = 'posted'
+       and j.journal_date between p_period_start and p_period_end
+   )
   where a.organization_id = p_organization_id
     and a.client_id = p_client_id
     and a.account_group in ('income','expense')
-    and (l.id is null or j.id is not null)
   group by a.id, a.account_code, a.account_name, a.account_group
   having coalesce(sum(l.debit_minor), 0) <> coalesce(sum(l.credit_minor), 0)
   order by a.account_code;
@@ -449,15 +453,17 @@ begin
   left join public.journal_lines l
     on l.account_id = a.id
    and l.organization_id = a.organization_id
-  left join public.journal_entries j
-    on j.id = l.journal_entry_id
-   and j.organization_id = l.organization_id
-   and j.lifecycle_status = 'posted'
-   and j.journal_date <= p_as_of_date
+   and exists (
+     select 1
+     from public.journal_entries j
+     where j.id = l.journal_entry_id
+       and j.organization_id = l.organization_id
+       and j.lifecycle_status = 'posted'
+       and j.journal_date <= p_as_of_date
+   )
   where a.organization_id = p_organization_id
     and a.client_id = p_client_id
     and a.account_group in ('asset','liability','equity')
-    and (l.id is null or j.id is not null)
   group by a.id, a.account_code, a.account_name, a.account_group
   having coalesce(sum(l.debit_minor), 0) <> coalesce(sum(l.credit_minor), 0)
   order by a.account_code;
