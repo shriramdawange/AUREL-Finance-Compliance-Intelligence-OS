@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ComponentType, type FormEvent, type ReactNode } from "react";
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownLeft, ArrowDownRight, ArrowLeftRight, ArrowRight,
   ArrowUpRight, BadgeCheck, Banknote, Bell, BookOpen, BriefcaseBusiness, Building2, CalendarDays,
@@ -21,7 +21,7 @@ type DocumentItem = { id: string; name: string; party: string; kind: string; dat
 type ReconItem = { id: string; date: string; description: string; statement: number; book: number; status: string };
 type Task = { id: string; title: string; client: string; due: string; assignee: string; priority: string; status: string };
 
-const navGroups = [
+const navGroups: { label: string; items: [string, string, ComponentType<any>][] }[] = [
   { label: "WORKSPACE", items: [
     ["Clients & Entities","clients",Building2],["Document Inbox","documents",Inbox],["Transactions","transactions",ArrowLeftRight],
     ["Sales & Purchases","sales-purchases",ReceiptText],["Banking","banking",Landmark],["Payables & Receivables","payables-receivables",Wallet]
@@ -43,7 +43,7 @@ const navGroups = [
   { label: "ADMIN", items: [
     ["Integrations","integrations",Zap],["Team & Permissions","team",Users],["Settings","settings",Settings]
   ]}
-] as const;
+];
 function PercentIcon(props: any) { return <span className="percent-icon" {...props}>%</span>; }
 
 const initialClients: Client[] = [
@@ -182,6 +182,8 @@ function App() {
     {toast&&<div className="toast"><CheckCircle2 size={16}/>{toast}</div>}
   </div>;
 }
+
+export default App;
 
 function Dashboard({period,transactions,tasks,go,openAssistant}:any) {
   return <div className="dashboard animate-in">
