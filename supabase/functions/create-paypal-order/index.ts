@@ -35,10 +35,12 @@ async function paypalAccessToken(baseUrl: string, clientId: string, clientSecret
 Deno.serve(async (request) => {
   const origin = request.headers.get("origin");
   const cors = corsHeaders(origin);
-  if (origin && !cors) return json({ error: "Origin is not allow-listed." }, 403);
+  if (!origin || !cors) return json({ error: "A browser origin on the AUREL allow-list is required." }, 403);
   if (request.method === "OPTIONS") return new Response("ok", { headers: cors ?? {} });
   if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, cors ?? {});
 
+  let admin: any = null;
+  let createdIntentId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const publishableKey = Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY");
@@ -58,7 +60,7 @@ Deno.serve(async (request) => {
     const { data: userData, error: userError } = await userClient.auth.getUser();
     if (userError || !userData.user) return json({ error: "Invalid or expired user session." }, 401, cors ?? {});
 
-    const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
     const body = await request.json();
     const organizationId = String(body.organization_id ?? "");
     const clientId = body.client_id ? String(body.client_id) : null;
@@ -75,10 +77,14 @@ Deno.serve(async (request) => {
     const validReturn = (value: string) => {
       try {
         const url = new URL(value);
-        return url.protocol === "https:" || url.hostname === "localhost" || url.hostname === "127.0.0.1";
+        const secureProtocol = url.protocol === "https:" || (url.protocol === "http:" && ["localhost","127.0.0.1"].includes(url.hostname));
+        return secureProtocol && url.origin === origin;
       } catch { return false; }
     };
     if (!validReturn(returnUrl) || !validReturn(cancelUrl)) return json({ error: "Return and cancel URLs must be HTTPS (localhost is allowed for development)." }, 400, cors ?? {});
+
+    const paypalEnvironment = Deno.env.get("PAYPAL_ENVIRONMENT") ?? "sandbox";
+    if (paypalEnvironment !== "sandbox") return json({ error: "This AUREL build creates PayPal Sandbox orders only." }, 503, cors ?? {});
 
     const { data: membership, error: membershipError } = await admin
       .from("organization_members")
@@ -101,9 +107,9 @@ Deno.serve(async (request) => {
       created_by: userData.user.id,
     }).select("id").single();
     if (intentError || !intent) throw new Error("Could not create payment intent: " + (intentError?.message ?? "unknown error"));
+    createdIntentId = intent.id;
 
-    const isLive = Deno.env.get("PAYPAL_ENVIRONMENT") === "live";
-    const baseUrl = isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+    const baseUrl = "https://api-m.sandbox.paypal.com";
     const accessToken = await paypalAccessToken(baseUrl, paypalClientId, paypalClientSecret);
     const orderResponse = await fetch(baseUrl + "/v2/checkout/orders", {
       method: "POST",
@@ -136,9 +142,12 @@ Deno.serve(async (request) => {
 
     const approvalUrl = (order.links ?? []).find((link: any) => link.rel === "approve")?.href;
     if (!approvalUrl) throw new Error("PayPal did not return an approval URL.");
-    return json({ payment_intent_id: intent.id, order_id: order.id, approval_url: approvalUrl, environment: isLive ? "live" : "sandbox" }, 200, cors ?? {});
+    return json({ payment_intent_id: intent.id, order_id: order.id, approval_url: approvalUrl, environment: "sandbox" }, 200, cors ?? {});
   } catch (error) {
     console.error("paypal-create-order:", error);
+    if (admin && createdIntentId) {
+      await admin.from("payment_intents").update({ lifecycle_status: "failed" }).eq("id", createdIntentId);
+    }
     return json({ error: error instanceof Error ? error.message : "Unexpected checkout error." }, 500, cors ?? {});
   }
 });
