@@ -41,6 +41,8 @@ Deno.serve(async (request) => {
   };
   if (Object.values(headers).some((value) => !value)) return json({ error: "Missing PayPal signature headers." }, 400);
 
+  let admin: any = null;
+  let processingRecordId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -51,8 +53,9 @@ Deno.serve(async (request) => {
       return json({ error: "Webhook verification secrets are not configured." }, 503);
     }
 
-    const isLive = Deno.env.get("PAYPAL_ENVIRONMENT") === "live";
-    const baseUrl = isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+    const paypalEnvironment = Deno.env.get("PAYPAL_ENVIRONMENT") ?? "sandbox";
+    if (paypalEnvironment !== "sandbox") throw new Error("This AUREL build accepts PayPal Sandbox webhooks only.");
+    const baseUrl = "https://api-m.sandbox.paypal.com";
     const accessToken = await getAccessToken(baseUrl, paypalClientId, paypalClientSecret);
     const verifyResponse = await fetch(baseUrl + "/v1/notifications/verify-webhook-signature", {
       method: "POST",
@@ -65,18 +68,51 @@ Deno.serve(async (request) => {
       return json({ error: "PayPal webhook signature verification failed." }, 401);
     }
 
-    const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
-    const { data: webhookRecord, error: insertWebhookError } = await admin.from("provider_webhook_events").insert({
+    admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    let webhookRecord: any = null;
+    const { data: insertedWebhook, error: insertWebhookError } = await admin.from("provider_webhook_events").insert({
       provider: "paypal",
       external_event_id: String(event.id),
       event_type: String(event.event_type),
       verification_status: "verified",
       processing_status: "received",
       raw_payload: event,
-    }).select("id").single();
+    }).select("id,processing_status,processing_attempts,processing_started_at").single();
 
-    if (insertWebhookError?.code === "23505") return json({ received: true, duplicate: true });
-    if (insertWebhookError || !webhookRecord) throw new Error("Could not store verified webhook event.");
+    if (insertWebhookError?.code === "23505") {
+      const { data: existingWebhook, error: lookupError } = await admin.from("provider_webhook_events")
+        .select("id,processing_status,processing_attempts,processing_started_at")
+        .eq("provider", "paypal").eq("external_event_id", String(event.id)).maybeSingle();
+      if (lookupError || !existingWebhook) throw new Error("Could not load the previously received webhook event.");
+      if (["processed","unmatched","ignored"].includes(existingWebhook.processing_status)) {
+        return json({ received: true, duplicate: true, status: existingWebhook.processing_status });
+      }
+      webhookRecord = existingWebhook;
+    } else if (insertWebhookError || !insertedWebhook) {
+      throw new Error("Could not store verified webhook event.");
+    } else {
+      webhookRecord = insertedWebhook;
+    }
+
+    processingRecordId = webhookRecord.id;
+    const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    let claim = admin.from("provider_webhook_events").update({
+      processing_status: "processing",
+      processing_attempts: Number(webhookRecord.processing_attempts || 0) + 1,
+      processing_started_at: new Date().toISOString(),
+      processing_error: null,
+      processed_at: null,
+    }).eq("id", webhookRecord.id);
+
+    if (webhookRecord.processing_status === "processing") {
+      claim = claim.eq("processing_status", "processing").lte("processing_started_at", staleBefore);
+    } else {
+      claim = claim.in("processing_status", ["received","failed"]);
+    }
+
+    const { data: claimedWebhook, error: claimError } = await claim.select("id").maybeSingle();
+    if (claimError) throw new Error("Could not claim webhook processing: " + claimError.message);
+    if (!claimedWebhook) return json({ received: true, duplicate: true, status: "processing" }, 202);
 
     const resource = event.resource;
     const relatedOrderId = resource?.supplementary_data?.related_ids?.order_id ?? resource?.related_ids?.order_id ?? null;
@@ -104,6 +140,7 @@ Deno.serve(async (request) => {
       await admin.from("provider_webhook_events").update({
         processing_status: "unmatched",
         processing_error: "No AUREL payment intent matched this verified PayPal event.",
+        processing_started_at: null,
         processed_at: new Date().toISOString(),
       }).eq("id", webhookRecord.id);
       return json({ received: true, matched: false });
@@ -117,12 +154,12 @@ Deno.serve(async (request) => {
     const type = String(event.event_type);
     if (type === "PAYMENT.CAPTURE.PENDING") {
       await admin.from("payment_intents").update({ lifecycle_status: "approval_pending" }).eq("id", intent.id);
-      await admin.from("provider_webhook_events").update({ processing_status: "processed", processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
+      await admin.from("provider_webhook_events").update({ processing_status: "processed", processing_started_at: null, processing_error: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, processed: true });
     }
     if (type === "PAYMENT.CAPTURE.DENIED") {
       await admin.from("payment_intents").update({ lifecycle_status: "failed" }).eq("id", intent.id);
-      await admin.from("provider_webhook_events").update({ processing_status: "processed", processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
+      await admin.from("provider_webhook_events").update({ processing_status: "processed", processing_started_at: null, processing_error: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, processed: true });
     }
 
@@ -130,7 +167,7 @@ Deno.serve(async (request) => {
     const isRefund = type === "PAYMENT.CAPTURE.REFUNDED";
     const isReversal = type === "PAYMENT.CAPTURE.REVERSED";
     if (!isCapture && !isRefund && !isReversal) {
-      await admin.from("provider_webhook_events").update({ processing_status: "ignored", processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
+      await admin.from("provider_webhook_events").update({ processing_status: "ignored", processing_started_at: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, ignored: true });
     }
 
@@ -138,6 +175,9 @@ Deno.serve(async (request) => {
     const currency = String(amountObject?.currency_code ?? intent.currency_code).toUpperCase();
     if (currency !== String(intent.currency_code).toUpperCase()) throw new Error("Webhook currency does not match the stored payment intent.");
     const grossMinor = decimalToMinor(amountObject?.value);
+    if (isCapture && grossMinor !== Number(intent.amount_minor)) {
+      throw new Error("PayPal capture amount does not match the stored payment intent amount.");
+    }
     const feeMinor = isCapture ? decimalToMinor(resource?.seller_receivable_breakdown?.paypal_fee?.value ?? "0") : 0;
     if (feeMinor > grossMinor) throw new Error("PayPal fee exceeds gross transaction amount.");
     const netMinor = grossMinor - feeMinor;
@@ -175,23 +215,39 @@ Deno.serve(async (request) => {
       provider_event_id: String(resource.id),
     });
     if (financialEventError?.code === "23505") {
-      await admin.from("provider_webhook_events").update({ processing_status: "processed", processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
+      await admin.from("payment_intents").update({
+        provider_capture_id: isCapture ? String(resource.id) : intent.provider_capture_id,
+        lifecycle_status: isCapture ? "captured" : isRefund ? "refunded" : "failed",
+      }).eq("id", intent.id);
+      await admin.from("provider_webhook_events").update({ processing_status: "processed", processing_started_at: null, processing_error: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, duplicate_resource: true });
     }
     if (financialEventError) throw new Error("Financial event could not be recorded: " + financialEventError.message);
 
-    await admin.from("payment_intents").update({
+    const { error: intentUpdateError } = await admin.from("payment_intents").update({
       provider_capture_id: isCapture ? String(resource.id) : intent.provider_capture_id,
       lifecycle_status: isCapture ? "captured" : isRefund ? "refunded" : "failed",
     }).eq("id", intent.id);
+    if (intentUpdateError) throw new Error("Financial event was recorded but the payment intent status could not be updated: " + intentUpdateError.message);
+
     await admin.from("provider_webhook_events").update({
       processing_status: "processed",
+      processing_started_at: null,
+      processing_error: null,
       processed_at: new Date().toISOString(),
     }).eq("id", webhookRecord.id);
 
     return json({ received: true, processed: true });
   } catch (error) {
     console.error("paypal-webhook processing error:", error);
+    if (admin && processingRecordId) {
+      const message = error instanceof Error ? error.message : "Webhook processing failed.";
+      await admin.from("provider_webhook_events").update({
+        processing_status: "failed",
+        processing_error: message.slice(0, 2000),
+        processing_started_at: null,
+      }).eq("id", processingRecordId).eq("processing_status", "processing");
+    }
     return json({ error: error instanceof Error ? error.message : "Webhook processing failed." }, 500);
   }
 });
