@@ -487,7 +487,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = ''
-as $
+as $aurel$
 declare
   row_data jsonb;
   external_line_id text;
@@ -512,10 +512,7 @@ begin
     raise exception 'Your organisation role cannot import bank statement rows.';
   end if;
 
-  if not exists (
-    select 1 from public.clients c
-    where c.id = p_client_id and c.organization_id = p_organization_id
-  ) then
+  if not exists (select 1 from public.clients c where c.id = p_client_id and c.organization_id = p_organization_id) then
     raise exception 'The client does not belong to this organisation.';
   end if;
 
@@ -523,8 +520,7 @@ begin
     raise exception 'A stable statement import identifier is required.';
   end if;
 
-  if p_rows is null or jsonb_typeof(p_rows) <> 'array'
-     or jsonb_array_length(p_rows) < 1 or jsonb_array_length(p_rows) > 5000 then
+  if p_rows is null or jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) < 1 or jsonb_array_length(p_rows) > 5000 then
     raise exception 'Import between 1 and 5000 bank statement rows per request.';
   end if;
 
@@ -539,8 +535,7 @@ begin
   end if;
 
   if exists (
-    select 1
-    from jsonb_array_elements(p_rows) as x(value)
+    select 1 from jsonb_array_elements(p_rows) as x(value)
     group by x.value ->> 'external_line_id'
     having count(*) > 1
   ) then
@@ -564,7 +559,75 @@ begin
       raise exception 'Every row must contain an external_line_id up to 160 characters.';
     end if;
 
-    if date_text !~ '^\d{4}-\d{2}-\d{2}
+    if length(date_text) <> 10 or date_text !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' then
+      raise exception 'Every row must contain a valid ISO transaction_date (YYYY-MM-DD).';
+    end if;
+    line_date := date_text::date;
+
+    if line_narration = '' or length(line_narration) > 1000 then
+      raise exception 'Every row must contain a narration between 1 and 1000 characters.';
+    end if;
+
+    if debit_text !~ '^[0-9]{1,18}' || '$' or credit_text !~ '^[0-9]{1,18}' || '$' then
+      raise exception 'Debit and credit amounts must be non-negative integer paise.';
+    end if;
+    debit_value := debit_text::bigint;
+    credit_value := credit_text::bigint;
+
+    if not ((debit_value > 0 and credit_value = 0) or (credit_value > 0 and debit_value = 0)) then
+      raise exception 'Each row must have either a positive debit or a positive credit, never both.';
+    end if;
+
+    if jsonb_typeof(source_row_value) <> 'object' then
+      raise exception 'source_row must be a JSON object.';
+    end if;
+
+    insert into public.bank_statement_lines (
+      organization_id, client_id, financial_account_id, statement_import_id,
+      external_line_id, transaction_date, narration, debit_minor, credit_minor, currency_code, source_row
+    ) values (
+      p_organization_id, p_client_id, p_financial_account_id, p_statement_import_id,
+      external_line_id, line_date, line_narration, debit_value, credit_value, 'INR', source_row_value
+    )
+    on conflict (organization_id, statement_import_id, external_line_id)
+      where external_line_id is not null
+    do nothing;
+
+    get diagnostics inserted_this_row = row_count;
+    if inserted_this_row = 1 then
+      inserted_line_count := inserted_line_count + 1;
+
+      insert into public.financial_events (
+        organization_id, client_id, financial_account_id, source_system, source_external_id, idempotency_key,
+        event_type, cash_direction, event_category, gross_minor, fee_minor, net_minor, currency_code,
+        lifecycle_status, description, occurred_at, created_by
+      ) values (
+        p_organization_id, p_client_id, p_financial_account_id, 'bank_csv',
+        p_statement_import_id::text || ':' || external_line_id,
+        'bankcsv:' || p_statement_import_id::text || ':' || external_line_id,
+        case when debit_value > 0 then 'bank_debit' else 'bank_credit' end,
+        case when debit_value > 0 then 'outflow' else 'inflow' end,
+        'other', greatest(debit_value, credit_value), 0, greatest(debit_value, credit_value), 'INR',
+        'committed', line_narration, line_date::timestamp at time zone 'Asia/Kolkata', (select auth.uid())
+      ) on conflict (organization_id, source_system, idempotency_key) do nothing;
+
+      get diagnostics inserted_this_row = row_count;
+      if inserted_this_row = 1 then inserted_event_count := inserted_event_count + 1; end if;
+    else
+      duplicate_count := duplicate_count + 1;
+    end if;
+  end loop;
+
+  return jsonb_build_object(
+    'statement_lines_inserted', inserted_line_count,
+    'financial_events_created', inserted_event_count,
+    'duplicate_lines_skipped', duplicate_count,
+    'statement_import_id', p_statement_import_id
+  );
+end;
+$aurel$;
+
+revoke all on function public.ensure_default_chart_of_accounts(uuid, uuid) from public, anon;
 revoke all on function public.create_journal_draft(uuid, uuid, date, text, jsonb) from public, anon;
 revoke all on function public.submit_journal_for_review(uuid, uuid) from public, anon;
 revoke all on function public.approve_journal(uuid, uuid) from public, anon;
@@ -583,148 +646,5 @@ grant execute on function public.get_trial_balance(uuid, uuid, date) to authenti
 grant execute on function public.get_profit_and_loss(uuid, uuid, date, date) to authenticated;
 grant execute on function public.get_balance_sheet(uuid, uuid, date) to authenticated;
 grant execute on function public.import_bank_statement_rows(uuid, uuid, uuid, uuid, jsonb) to authenticated;
-
-commit;
- then
-      raise exception 'Every row must contain a valid ISO transaction_date (YYYY-MM-DD).';
-    end if;
-    line_date := date_text::date;
-
-    if line_narration = '' or length(line_narration) > 1000 then
-      raise exception 'Every row must contain a narration between 1 and 1000 characters.';
-    end if;
-
-    if debit_text !~ '^\d{1,18}
-revoke all on function public.create_journal_draft(uuid, uuid, date, text, jsonb) from public, anon;
-revoke all on function public.submit_journal_for_review(uuid, uuid) from public, anon;
-revoke all on function public.approve_journal(uuid, uuid) from public, anon;
-revoke all on function public.post_approved_journal(uuid, uuid) from public, anon;
-revoke all on function public.get_trial_balance(uuid, uuid, date) from public, anon;
-revoke all on function public.get_profit_and_loss(uuid, uuid, date, date) from public, anon;
-revoke all on function public.get_balance_sheet(uuid, uuid, date) from public, anon;
-
-grant execute on function public.ensure_default_chart_of_accounts(uuid, uuid) to authenticated;
-grant execute on function public.create_journal_draft(uuid, uuid, date, text, jsonb) to authenticated;
-grant execute on function public.submit_journal_for_review(uuid, uuid) to authenticated;
-grant execute on function public.approve_journal(uuid, uuid) to authenticated;
-grant execute on function public.post_approved_journal(uuid, uuid) to authenticated;
-grant execute on function public.get_trial_balance(uuid, uuid, date) to authenticated;
-grant execute on function public.get_profit_and_loss(uuid, uuid, date, date) to authenticated;
-grant execute on function public.get_balance_sheet(uuid, uuid, date) to authenticated;
-
-commit;
- or credit_text !~ '^\d{1,18}
-revoke all on function public.create_journal_draft(uuid, uuid, date, text, jsonb) from public, anon;
-revoke all on function public.submit_journal_for_review(uuid, uuid) from public, anon;
-revoke all on function public.approve_journal(uuid, uuid) from public, anon;
-revoke all on function public.post_approved_journal(uuid, uuid) from public, anon;
-revoke all on function public.get_trial_balance(uuid, uuid, date) from public, anon;
-revoke all on function public.get_profit_and_loss(uuid, uuid, date, date) from public, anon;
-revoke all on function public.get_balance_sheet(uuid, uuid, date) from public, anon;
-
-grant execute on function public.ensure_default_chart_of_accounts(uuid, uuid) to authenticated;
-grant execute on function public.create_journal_draft(uuid, uuid, date, text, jsonb) to authenticated;
-grant execute on function public.submit_journal_for_review(uuid, uuid) to authenticated;
-grant execute on function public.approve_journal(uuid, uuid) to authenticated;
-grant execute on function public.post_approved_journal(uuid, uuid) to authenticated;
-grant execute on function public.get_trial_balance(uuid, uuid, date) to authenticated;
-grant execute on function public.get_profit_and_loss(uuid, uuid, date, date) to authenticated;
-grant execute on function public.get_balance_sheet(uuid, uuid, date) to authenticated;
-
-commit;
- then
-      raise exception 'Debit and credit amounts must be non-negative integer paise.';
-    end if;
-    debit_value := debit_text::bigint;
-    credit_value := credit_text::bigint;
-
-    if not (
-      (debit_value > 0 and credit_value = 0)
-      or (credit_value > 0 and debit_value = 0)
-    ) then
-      raise exception 'Each row must have either a positive debit or a positive credit, never both.';
-    end if;
-
-    if jsonb_typeof(source_row_value) <> 'object' then
-      raise exception 'source_row must be a JSON object.';
-    end if;
-
-    insert into public.bank_statement_lines (
-      organization_id, client_id, financial_account_id, statement_import_id,
-      external_line_id, transaction_date, narration, debit_minor, credit_minor,
-      currency_code, source_row
-    )
-    values (
-      p_organization_id, p_client_id, p_financial_account_id, p_statement_import_id,
-      external_line_id, line_date, line_narration, debit_value, credit_value,
-      'INR', source_row_value
-    )
-    on conflict (organization_id, statement_import_id, external_line_id)
-      where external_line_id is not null
-    do nothing;
-
-    get diagnostics inserted_this_row = row_count;
-
-    if inserted_this_row = 1 then
-      inserted_line_count := inserted_line_count + 1;
-
-      insert into public.financial_events (
-        organization_id, client_id, financial_account_id,
-        source_system, source_external_id, idempotency_key,
-        event_type, cash_direction, event_category,
-        gross_minor, fee_minor, net_minor, currency_code,
-        lifecycle_status, description, occurred_at, created_by
-      )
-      values (
-        p_organization_id, p_client_id, p_financial_account_id,
-        'bank_csv',
-        p_statement_import_id::text || ':' || external_line_id,
-        'bankcsv:' || p_statement_import_id::text || ':' || external_line_id,
-        case when debit_value > 0 then 'bank_debit' else 'bank_credit' end,
-        case when debit_value > 0 then 'outflow' else 'inflow' end,
-        'other',
-        greatest(debit_value, credit_value), 0, greatest(debit_value, credit_value), 'INR',
-        'committed', line_narration,
-        line_date::timestamp at time zone 'Asia/Kolkata',
-        (select auth.uid())
-      )
-      on conflict (organization_id, source_system, idempotency_key)
-      do nothing;
-
-      get diagnostics inserted_this_row = row_count;
-      if inserted_this_row = 1 then
-        inserted_event_count := inserted_event_count + 1;
-      end if;
-    else
-      duplicate_count := duplicate_count + 1;
-    end if;
-  end loop;
-
-  return jsonb_build_object(
-    'statement_lines_inserted', inserted_line_count,
-    'financial_events_created', inserted_event_count,
-    'duplicate_lines_skipped', duplicate_count,
-    'statement_import_id', p_statement_import_id
-  );
-end;
-$;
-
-revoke all on function public.ensure_default_chart_of_accounts(uuid, uuid) from public, anon;
-revoke all on function public.create_journal_draft(uuid, uuid, date, text, jsonb) from public, anon;
-revoke all on function public.submit_journal_for_review(uuid, uuid) from public, anon;
-revoke all on function public.approve_journal(uuid, uuid) from public, anon;
-revoke all on function public.post_approved_journal(uuid, uuid) from public, anon;
-revoke all on function public.get_trial_balance(uuid, uuid, date) from public, anon;
-revoke all on function public.get_profit_and_loss(uuid, uuid, date, date) from public, anon;
-revoke all on function public.get_balance_sheet(uuid, uuid, date) from public, anon;
-
-grant execute on function public.ensure_default_chart_of_accounts(uuid, uuid) to authenticated;
-grant execute on function public.create_journal_draft(uuid, uuid, date, text, jsonb) to authenticated;
-grant execute on function public.submit_journal_for_review(uuid, uuid) to authenticated;
-grant execute on function public.approve_journal(uuid, uuid) to authenticated;
-grant execute on function public.post_approved_journal(uuid, uuid) to authenticated;
-grant execute on function public.get_trial_balance(uuid, uuid, date) to authenticated;
-grant execute on function public.get_profit_and_loss(uuid, uuid, date, date) to authenticated;
-grant execute on function public.get_balance_sheet(uuid, uuid, date) to authenticated;
 
 commit;
