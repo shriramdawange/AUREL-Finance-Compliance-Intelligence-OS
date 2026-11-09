@@ -37,6 +37,15 @@ function captureFromOrder(order: any) {
   return null;
 }
 
+function decimalToMinor(value: unknown): number {
+  const input = String(value ?? "");
+  if (!/^\\d+(\\.\\d{1,2})?$/.test(input)) throw new Error("PayPal returned an invalid capture amount.");
+  const [whole, fraction = ""] = input.split(".");
+  const minor = Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
+  if (!Number.isSafeInteger(minor)) throw new Error("PayPal capture amount is outside the supported range.");
+  return minor;
+}
+
 Deno.serve(async (request) => {
   const origin = request.headers.get("origin");
   const cors = corsHeaders(origin);
@@ -82,11 +91,11 @@ Deno.serve(async (request) => {
     const { data: intent, error: intentError } = await admin.from("payment_intents").select("*")
       .eq("id", intentId).eq("organization_id", organizationId).maybeSingle();
     if (intentError || !intent) return json({ error: "Payment intent was not found in this organisation." }, 404, cors ?? {});
-    if (intent.lifecycle_status === "captured" && intent.provider_capture_id) {
-      return json({ payment_intent_id: intent.id, capture_id: intent.provider_capture_id, status: "captured", duplicate: true }, 200, cors ?? {});
-    }
     if (!intent.provider_order_id || intent.provider_order_id !== paypalOrderId) {
       return json({ error: "The PayPal return token does not match this stored AUREL order." }, 409, cors ?? {});
+    }
+    if (intent.lifecycle_status === "captured" && intent.provider_capture_id) {
+      return json({ payment_intent_id: intent.id, capture_id: intent.provider_capture_id, status: "captured", duplicate: true }, 200, cors ?? {});
     }
     if (!["approval_pending","approved"].includes(intent.lifecycle_status)) {
       return json({ error: "This payment intent has not reached the PayPal approval stage." }, 409, cors ?? {});
@@ -112,7 +121,13 @@ Deno.serve(async (request) => {
 
     const capture = captureFromOrder(result);
     const status = String(capture?.status ?? result?.status ?? "UNKNOWN").toUpperCase();
+    if (status === "COMPLETED" && !capture?.id) throw new Error("PayPal marked the order completed but did not return a capture identifier.");
     if (status === "COMPLETED" && capture?.id) {
+      const captureCurrency = String(capture?.amount?.currency_code ?? "").toUpperCase();
+      const captureAmountMinor = decimalToMinor(capture?.amount?.value);
+      if (captureCurrency !== String(intent.currency_code).toUpperCase() || captureAmountMinor !== Number(intent.amount_minor)) {
+        throw new Error("Completed PayPal capture does not match the stored payment intent amount and currency.");
+      }
       const { error: updateError } = await admin.from("payment_intents").update({
         provider_capture_id: String(capture.id),
         lifecycle_status: "captured",
