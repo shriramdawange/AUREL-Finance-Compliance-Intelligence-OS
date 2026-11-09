@@ -8,7 +8,7 @@ type Membership = { organization_id: string; role: string; organization: Organiz
 
 type AurelSessionContextValue = {
   mode: "demo" | "live";
-  client: NonNullable<typeof supabase>;
+  client: typeof supabase;
   user: User | null;
   userId: string | null;
   organizationId: string | null;
