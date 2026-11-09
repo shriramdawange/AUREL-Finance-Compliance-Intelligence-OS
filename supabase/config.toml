@@ -1,0 +1,7 @@
+project_id = "aurel-finance-compliance-intelligence-os"
+
+[functions.paypal-webhook]
+verify_jwt = false
+
+[functions.create-paypal-order]
+verify_jwt = true
