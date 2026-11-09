@@ -39,7 +39,7 @@ function captureFromOrder(order: any) {
 
 function decimalToMinor(value: unknown): number {
   const input = String(value ?? "");
-  if (!/^\\d+(\\.\\d{1,2})?$/.test(input)) throw new Error("PayPal returned an invalid capture amount.");
+  if (!/^[0-9]+([.][0-9]{1,2})?$/.test(input)) throw new Error("PayPal returned an invalid capture amount.");
   const [whole, fraction = ""] = input.split(".");
   const minor = Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
   if (!Number.isSafeInteger(minor)) throw new Error("PayPal capture amount is outside the supported range.");
