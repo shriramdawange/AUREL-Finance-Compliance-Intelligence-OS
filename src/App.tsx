@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type FormEvent, type ReactNode } from "react";
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownLeft, ArrowDownRight, ArrowLeftRight, ArrowRight,
   ArrowUpRight, BadgeCheck, Banknote, Bell, BookOpen, BriefcaseBusiness, Building2, CalendarDays,
@@ -109,6 +109,8 @@ function App() {
   const [tasks,setTasks] = useState(initialTasks);
   const [journalEntries,setJournalEntries] = useState<any[]>([]);
   const [bankStatementLines,setBankStatementLines] = useState<any[]>([]);
+  const [paymentIntents,setPaymentIntents] = useState<any[]>([]);
+  const paypalCallbackHandled = useRef(false);
   const [assistantOpen,setAssistantOpen] = useState(false);
   const [mobileOpen,setMobileOpen] = useState(false);
   const [modal,setModal] = useState("");
@@ -175,6 +177,29 @@ function App() {
     notify("Task status saved.");
   };
 
+  const refreshPaymentIntents = async () => {
+    if (!dbClient || !isAuthenticated || !organizationId) return;
+    const { data, error } = await dbClient.from("payment_intents")
+      .select("id,client_id,provider,amount_minor,currency_code,description,lifecycle_status,created_at")
+      .eq("organization_id",organizationId).order("created_at",{ascending:false}).limit(100);
+    if(error){notify("Payment requests could not be refreshed: "+error.message);return;}
+    const clientById=new Map(clients.map((client:any)=>[client.id,client.name]));
+    setPaymentIntents((data??[]).map((row:any)=>({
+      id:row.id,client:row.client_id?clientById.get(row.client_id)||"Client record":"Organisation payment",
+      provider:row.provider,amount_minor:Number(row.amount_minor||0),currency_code:String(row.currency_code||"USD").trim(),
+      description:row.description,status:String(row.lifecycle_status).replace(/_/g," ").replace(/\\b\\w/g,(ch:string)=>ch.toUpperCase()),
+      lifecycle_status:row.lifecycle_status,created_at:row.created_at,
+    })));
+  };
+
+  const cancelPaymentIntent = async (intent:any) => {
+    if(!dbClient||!organizationId)return;
+    const {data,error}=await dbClient.functions.invoke("cancel-paypal-order",{body:{organization_id:organizationId,payment_intent_id:intent.id}});
+    if(error||data?.error){notify("Payment request could not be cancelled: "+(data?.error||error?.message||"Unknown error"));return;}
+    notify("Unpaid PayPal request cancelled.");
+    await refreshPaymentIntents();
+  };
+
   const refreshJournals = async () => {
     if (!dbClient || !isAuthenticated || !organizationId) return;
     const { data, error } = await dbClient.from("journal_entries")
@@ -203,17 +228,19 @@ function App() {
     setTasks([]);
     setJournalEntries([]);
     setBankStatementLines([]);
+    setPaymentIntents([]);
     (async () => {
-      const [clientResult, documentResult, eventResult, taskResult, journalResult, bankLineResult] = await Promise.all([
+      const [clientResult, documentResult, eventResult, taskResult, journalResult, bankLineResult, paymentResult] = await Promise.all([
         dbClient.from("clients").select("id,legal_name,entity_type,gstin,state,annual_turnover_minor,status,relationship_manager").eq("organization_id", organizationId).order("created_at", { ascending: false }),
         dbClient.from("source_documents").select("id,original_filename,counterparty_name,document_type,document_date,total_minor,extraction_confidence,status,created_at").eq("organization_id", organizationId).order("created_at", { ascending: false }),
         dbClient.from("financial_events").select("id,occurred_at,counterparty_name,description,cash_direction,gross_minor,fee_minor,event_category,source_system,lifecycle_status").eq("organization_id", organizationId).order("occurred_at", { ascending: false }).limit(100),
         dbClient.from("tasks").select("id,title,due_at,assigned_to,priority,lifecycle_status,client_id").eq("organization_id", organizationId).order("due_at", { ascending: true }).limit(100),
         dbClient.from("journal_entries").select("id,journal_number,journal_date,narration,lifecycle_status,journal_lines(debit_minor,credit_minor)").eq("organization_id", organizationId).order("journal_date", { ascending: false }).limit(100),
         dbClient.from("bank_statement_lines").select("id,client_id,transaction_date,narration,debit_minor,credit_minor,external_line_id,statement_import_id,financial_account_id").eq("organization_id", organizationId).order("transaction_date", { ascending: false }).limit(500),
+        dbClient.from("payment_intents").select("id,client_id,provider,amount_minor,currency_code,description,lifecycle_status,created_at").eq("organization_id",organizationId).order("created_at",{ascending:false}).limit(100),
       ]);
       if (!active) return;
-      const errors = [clientResult.error, documentResult.error, eventResult.error, taskResult.error, journalResult.error, bankLineResult.error].filter(Boolean);
+      const errors = [clientResult.error, documentResult.error, eventResult.error, taskResult.error, journalResult.error, bankLineResult.error, paymentResult.error].filter(Boolean);
       if (errors.length) notify("Some live records could not be loaded. Check the database schema and RLS policies.");
       setClients((clientResult.data ?? []).map((row: any) => ({
         id: row.id, name: row.legal_name, type: String(row.entity_type).replace(/_/g, " ").replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
@@ -257,10 +284,59 @@ function App() {
         import_id: row.statement_import_id,
         financial_account_id: row.financial_account_id || "Unassigned",
       })));
+      const clientById = new Map((clientResult.data ?? []).map((row:any)=>[row.id,row.legal_name]));
+      setPaymentIntents((paymentResult.data ?? []).map((row:any)=>({
+        id:row.id,client:row.client_id?clientById.get(row.client_id)||"Client record":"Organisation payment",
+        provider:row.provider,amount_minor:Number(row.amount_minor||0),currency_code:String(row.currency_code||"USD").trim(),
+        description:row.description,status:String(row.lifecycle_status).replace(/_/g," ").replace(/\\b\\w/g,(ch:string)=>ch.toUpperCase()),
+        lifecycle_status:row.lifecycle_status,created_at:row.created_at,
+      })));
 ;
     })();
     return () => { active = false; };
   }, [dbClient, isAuthenticated, organizationId]);
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const isReturn=params.get("aurel_paypal_return")==="1";
+    const isCancel=params.get("aurel_paypal_cancel")==="1";
+    if(!isReturn&&!isCancel)return;
+    if(!dbClient||!isAuthenticated||!organizationId||paypalCallbackHandled.current)return;
+    paypalCallbackHandled.current=true;
+    const clearCallback=()=>{
+      const cleanUrl=new URL(window.location.href);
+      cleanUrl.searchParams.delete("aurel_paypal_return");
+      cleanUrl.searchParams.delete("aurel_paypal_cancel");
+      cleanUrl.searchParams.delete("token");
+      cleanUrl.searchParams.delete("PayerID");
+      window.history.replaceState({},document.title,cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);
+    };
+    (async()=>{
+      const raw=localStorage.getItem("aurel.paypal.pending");
+      if(!raw){notify("No pending AUREL checkout was found for this PayPal return.");clearCallback();return;}
+      let pending:any;
+      try{pending=JSON.parse(raw);}catch{localStorage.removeItem("aurel.paypal.pending");notify("The pending PayPal checkout record was invalid.");clearCallback();return;}
+      if(isCancel){
+        const {data,error}=await dbClient.functions.invoke("cancel-paypal-order",{body:{organization_id:organizationId,payment_intent_id:pending.payment_intent_id}});
+        if(error||data?.error){notify("PayPal checkout was cancelled, but AUREL could not update the request: "+(data?.error||error?.message||"Unknown error"));}
+        else{localStorage.removeItem("aurel.paypal.pending");notify("PayPal checkout cancelled.");}
+        await refreshPaymentIntents();clearCallback();return;
+      }
+      const paypalOrderId=params.get("token");
+      if(!paypalOrderId){notify("PayPal returned without an order token. The payment request remains pending.");clearCallback();return;}
+      const {data,error}=await dbClient.functions.invoke("capture-paypal-order",{body:{
+        organization_id:organizationId,payment_intent_id:pending.payment_intent_id,paypal_order_id:paypalOrderId,
+      }});
+      if(error||data?.error){
+        notify("PayPal capture needs attention: "+(data?.error||error?.message||"Unknown error"));
+      }else{
+        if(data?.status==="COMPLETED")localStorage.removeItem("aurel.paypal.pending");
+        notify(data?.status==="COMPLETED"?"PayPal capture confirmed. Waiting for the signed webhook to record the cash event.":"PayPal capture is pending provider confirmation.");
+      }
+      await Promise.all([refreshPaymentIntents(),refreshTransactions()]);
+      clearCallback();
+    })().catch((callbackError)=>{notify("PayPal return handling failed: "+(callbackError instanceof Error?callbackError.message:"Unexpected error"));clearCallback();});
+  },[dbClient,isAuthenticated,organizationId]);
+
 
 
   const go = (path:string) => { location.hash = "/" + path; setSection(path); setMobileOpen(false); setSelected(null); };
