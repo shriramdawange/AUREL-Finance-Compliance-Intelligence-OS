@@ -9,8 +9,9 @@ AUREL intentionally uses a **dedicated Supabase project**. Do not point it at ED
 - Organisation bootstrap: a signed-in user can create the first organisation and become its owner.
 - Tenant access: PostgreSQL RLS helper functions and role-scoped policies are defined in `bootstrap.sql`.
 - Document storage: a private `aurel-documents` bucket is defined. Live file upload is wired after authentication.
-- Persisted UI adapters: client master, source documents, financial event timeline, tasks, journal workflow and bank statement import are wired to Supabase.
+- Persisted UI adapters: client master, source documents, financial event timeline, tasks, journal workflow, bank statement import and trade document registers are wired to Supabase.
 - Accounting RPC layer: default chart-of-accounts initialisation, balanced journal draft creation, submit/review/approve/post lifecycle, General Ledger, Trial Balance, P&L and Balance Sheet query functions are defined in `core-operations.sql`.
+- Sales/purchases: trade-document RPCs create draft sales invoices, purchase bills, credit notes and debit notes with server-side taxable/tax calculation; a different reviewer can approve, and owner/admin/manager can issue. Trade documents remain obligations and do not create cash events or journals.
 - Live General Ledger screen calculates posted-account running balances. Balance Sheet adds a derived current-financial-year earnings presentation line.
 - Cash Flow currently shows posted cash/bank account ledger movements only; it is not yet a classified operating/investing/financing cash-flow statement.
 - Journal UI: connected sessions can initialise a starter chart, create a two-line balanced journal draft, submit it for review, approve it and post it. Trial Balance, P&L and Balance Sheet screens query posted journal lines.
@@ -31,11 +32,12 @@ In the new project's SQL Editor, run these files in order:
 1. `supabase/bootstrap.sql`
 2. `supabase/integrity-hardening.sql`
 3. `supabase/core-operations.sql`
-4. `supabase/verify-core-operations.sql`
+4. `supabase/trade-operations.sql`
+5. `supabase/verify-core-operations.sql`
 
-The bootstrap transaction creates tenant tables, indexes, RLS policies, private storage bucket and audit triggers. The hardening script adds double-entry journal posting validation, strict draft → review → approval → posting transitions, same-client account checks on journal lines, and service-only PayPal webhook payloads. The core-operations script adds invoker-rights RPCs for chart-of-accounts initialisation, atomic balanced journal creation, review/approval/posting and posted-ledger Trial Balance, P&L and Balance Sheet queries. The core-operations script also adds idempotent bank statement row ingestion. Every bank row is stored as a statement line and emitted as an unclassified canonical financial event; it is not automatically booked to sales or expense. The verification script is a non-destructive installation smoke check; it does not replace behavioural tests.
+The bootstrap transaction creates tenant tables, indexes, RLS policies, private storage bucket and audit triggers. The hardening script adds double-entry journal posting validation, strict draft → review → approval → posting transitions, same-client account checks on journal lines, and service-only PayPal webhook payloads. The core-operations script adds invoker-rights RPCs for chart-of-accounts initialisation, atomic balanced journal creation, review/approval/posting and posted-ledger General Ledger, Trial Balance, P&L and Balance Sheet queries. The trade-operations script adds a source-backed obligation workflow for sales/purchase documents, including separate preparer/reviewer/issuer permissions. The core-operations script also adds idempotent bank statement row ingestion. Every bank row is stored as a statement line and emitted as an unclassified canonical financial event; it is not automatically booked to sales or expense. The verification script is a non-destructive installation smoke check; it does not replace behavioural tests.
 
-Run the bootstrap exactly once on the new empty project. Apply the next two scripts after it. Confirm the smoke check succeeds. Then run Supabase Security, Performance and Health Advisors and resolve all findings before using real client data.
+Run the bootstrap exactly once on the new empty project. Apply the hardening, core-operations and trade-operations scripts after it. Confirm the smoke check succeeds. Then run Supabase Security, Performance and Health Advisors and resolve all findings before using real client data.
 
 ### Data API exposure
 
@@ -115,7 +117,8 @@ The private document storage path and extraction proposal tables are ready. OCR/
 - Posted journal entries cannot be changed; posting requires balanced debit/credit totals.
 - Invoice obligation, payment event and receipt evidence remain distinct.
 - PayPal transfers, capital, loans and processor fees must not be misclassified as operating revenue or duplicated as expenses.
-- GST/tax screens remain workpaper-only; no GSTN filing or tax authority integration is implemented.
+- Trade documents represent obligations and do not create cash events or journals. Settlement linking, ageing, and journal automation remain pending.
+- GST/tax screens remain workpaper-only; trade document tax arithmetic is not an independent statutory GST determination. No GSTN filing or tax authority integration is implemented.
 
 ## 7. Verification still required
 
@@ -124,6 +127,6 @@ Before handling real records:
 2. Run Supabase Security, Performance and Health Advisors.
 3. Test organisation creation, multi-tenant isolation, membership boundaries and RLS negative cases with two independent users.
 4. Test private document upload/download and cross-tenant denial.
-5. Run the behavioural cases in `CORE_ACCOUNTING_TEST_PLAN.md`; specifically test idempotent chart initialisation, atomic draft creation, role transitions, balanced posting and report totals.
+5. Run the behavioural cases in `CORE_ACCOUNTING_TEST_PLAN.md`; specifically test idempotent chart initialisation, atomic draft creation, role transitions, balanced posting, report totals and trade document lifecycle/amounts.
 6. Test PayPal sandbox order approval, capture, denied, refund, reversal, duplicate delivery, unmatched intent, retry after processing failure and invalid signature cases.
 7. Add OCR provider, deterministic GST/tax rules, bank imports, period locks, complete reversal workflows, cash-flow classification, accounting adapters, agent tools, monitoring and retention policies.
