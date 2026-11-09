@@ -47,12 +47,25 @@ Create two test organisations with independent users. In organisation A, create 
 - An account from another organisation or a different client is rejected.
 - A user without the permitted organisation role cannot import.
 
+## General ledger and financial statements
+
+- The general ledger returns only posted journal lines for the selected client and date range.
+- Each row uses the account's normal balance direction and includes opening balance and cumulative running balance.
+- No draft, pending-review or approved-only journal appears in the general ledger.
+- The Trial Balance includes active accounts and balances as of the requested date.
+- P&L includes posted income/expense balances in the selected inclusive period.
+- Balance Sheet includes posted asset/liability/equity balances plus a derived current-financial-year earnings line, calculated from client financial-year start month.
+- For an independently prepared balanced test ledger, total debit balances must equal total credit balances on the Trial Balance.
+- Verify that Balance Sheet assets equal liabilities + equity including current-year earnings when opening balances are complete and properly mapped.
+- The Cash Flow screen is currently a cash/bank account ledger activity view, not a classified operating/investing/financing cash-flow statement.
+
 ## Reports
 
 - Trial Balance includes all active chart accounts with zero balances and only includes posted journals through the as-of date.
 - Profit & Loss includes income/expense accounts within the requested inclusive period and excludes drafts/pending/approved journals.
 - Balance Sheet includes asset/liability/equity accounts through the as-of date and excludes unposted journals.
 - Trial Balance total closing debits equal total closing credits.
+- General ledger closing balance agrees with the same account's Trial Balance balance.
 - Compare every report total to a manually prepared control example before accepting results.
 
 ## Limitations still outstanding
@@ -62,4 +75,5 @@ Create two test organisations with independent users. In organisation A, create 
 - Cash-flow classification and indirect-method reconciliation.
 - Source-to-journal automation, reversals and tax-specific posting maps.
 - Cash-flow classification, opening balance imports and subledger-to-bank reconciliation.
+- Current-year earnings is a derived report line, not a posted closing journal; formal year-end close and retained-earnings transfer logic remain outstanding.
 - Automated pgTAP/CI database tests and independent security review.
