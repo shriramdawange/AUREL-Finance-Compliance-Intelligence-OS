@@ -688,6 +688,88 @@ function TradeDocumentModal({onClose,notify,dbClient,organizationId,clients=[],i
   </Modal>;
 }
 
+function TradeDocumentModal({onClose,notify,dbClient,organizationId,clients=[],isAuthenticated=false,onCreated}:any){
+  const [clientId,setClientId]=useState("");
+  const [kind,setKind]=useState("sales_invoice");
+  const [documentNumber,setDocumentNumber]=useState("");
+  const [documentDate,setDocumentDate]=useState("2026-11-09");
+  const [dueDate,setDueDate]=useState("2026-11-30");
+  const [counterparty,setCounterparty]=useState("");
+  const [gstin,setGstin]=useState("");
+  const [supplyState,setSupplyState]=useState("Maharashtra");
+  const [description,setDescription]=useState("");
+  const [hsn,setHsn]=useState("");
+  const [quantity,setQuantity]=useState("1");
+  const [unitRate,setUnitRate]=useState("1000.00");
+  const [gstRate,setGstRate]=useState("18");
+  const [taxMode,setTaxMode]=useState("intra");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+
+  useEffect(()=>{
+    if(clients.length&&!clients.some((client:any)=>client.id===clientId))setClientId(clients[0].id);
+  },[clients,clientId]);
+
+  const quantityScaled=(()=>{
+    const value=quantity.trim();
+    if(!/^[0-9]+(\.[0-9]{1,4})?$/.test(value))return null;
+    const parts=value.split(".");
+    return Number(parts[0])*10000+Number(((parts[1]||"")+"0000").slice(0,4));
+  })();
+  const unitMinor=parseRupeeMinor(unitRate);
+  const rate=Number(gstRate);
+  const taxable=quantityScaled!==null&&unitMinor!==null?Math.round(quantityScaled*unitMinor/10000):null;
+  const tax=taxable!==null?Math.round(taxable*rate/100):null;
+  const cgst=taxMode==="intra"?Math.floor((tax||0)/2):0;
+  const sgst=taxMode==="intra"?(tax||0)-cgst:0;
+  const igst=taxMode==="inter"?(tax||0):0;
+  const valid=Boolean(isAuthenticated&&dbClient&&organizationId&&clientId&&documentNumber.trim()&&documentDate
+    &&counterparty.trim().length>=2&&description.trim().length>=2&&quantityScaled!==null&&quantityScaled>0
+    &&unitMinor!==null&&unitMinor<=9000000000000000&&taxable!==null&&Number.isSafeInteger(taxable)&&taxable>=0
+    &&Number.isFinite(rate)&&rate>=0&&rate<=100&&tax!==null&&Number.isSafeInteger(tax));
+
+  const save=async(event:FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();setError("");
+    if(!valid){setError("Complete the required fields with a valid quantity, INR rate and GST rate.");return;}
+    setBusy(true);
+    const {data,error:rpcError}=await dbClient.rpc("create_trade_document",{
+      p_organization_id:organizationId,p_client_id:clientId,p_document_kind:kind,
+      p_document_number:documentNumber.trim(),p_document_date:documentDate,p_due_date:dueDate||null,
+      p_counterparty_name:counterparty.trim(),p_counterparty_gstin:gstin.trim()||null,
+      p_counterparty_state:supplyState.trim()||null,p_description:description.trim(),
+      p_hsn_sac:hsn.trim()||null,p_quantity:Number(quantity),p_unit_rate_minor:unitMinor,
+      p_gst_rate:rate,p_tax_mode:taxMode,
+    });
+    if(rpcError){setError(rpcError.message);setBusy(false);return;}
+    notify("Trade document saved as a draft obligation. No cash event or journal was created.");
+    await onCreated?.();
+    setBusy(false);onClose();
+  };
+
+  return <Modal title="Create sales / purchase document" subtitle="Create a draft commercial obligation. A different reviewer must approve it before authorised issuance." onClose={onClose}>
+    <form className="form-grid" onSubmit={save}>
+      <label>Client / entity<select value={clientId} onChange={e=>setClientId(e.target.value)}><option value="">Select client</option>{clients.map((client:any)=><option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+      <label>Document type<select value={kind} onChange={e=>setKind(e.target.value)}><option value="sales_invoice">Sales invoice</option><option value="purchase_bill">Purchase bill</option><option value="credit_note">Credit note</option><option value="debit_note">Debit note</option></select></label>
+      <label>Document number<input value={documentNumber} onChange={e=>setDocumentNumber(e.target.value)} maxLength={80} required/></label>
+      <label>Counterparty<input value={counterparty} onChange={e=>setCounterparty(e.target.value)} maxLength={200} required placeholder="Customer / supplier name"/></label>
+      <label>Document date<input type="date" value={documentDate} onChange={e=>setDocumentDate(e.target.value)} required/></label>
+      <label>Due date<input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}/></label>
+      <label>Counterparty GSTIN<input value={gstin} onChange={e=>setGstin(e.target.value)} maxLength={15}/></label>
+      <label>Place of supply (state)<input value={supplyState} onChange={e=>setSupplyState(e.target.value)} maxLength={80}/></label>
+      <label className="full">Line description<input value={description} onChange={e=>setDescription(e.target.value)} maxLength={300} required/></label>
+      <label>HSN / SAC<input value={hsn} onChange={e=>setHsn(e.target.value)} maxLength={16}/></label>
+      <label>Quantity<input value={quantity} onChange={e=>setQuantity(e.target.value)} inputMode="decimal"/></label>
+      <label>Unit rate (INR)<input value={unitRate} onChange={e=>setUnitRate(e.target.value)} inputMode="decimal"/></label>
+      <label>GST rate (%)<select value={gstRate} onChange={e=>setGstRate(e.target.value)}>{["0","5","12","18","28"].map(rate=><option key={rate} value={rate}>{rate}%</option>)}</select></label>
+      <label>Tax treatment<select value={taxMode} onChange={e=>setTaxMode(e.target.value)}><option value="intra">Intra-state · CGST + SGST</option><option value="inter">Inter-state · IGST</option></select></label>
+      <div className="modal-note full"><ReceiptText size={14}/>{taxable===null||tax===null?"Enter valid numeric values to preview tax.":<>Taxable {inr(taxable)} · CGST {inr(cgst)} · SGST {inr(sgst)} · IGST {inr(igst)} · Total {inr(taxable+tax)}</>}</div>
+      {!isAuthenticated&&<div className="auth-alert error full">Sign in to an AUREL organisation to save a trade document.</div>}
+      {error&&<div className="auth-alert error full">{error}</div>}
+      <div className="modal-actions full"><button type="button" className="btn btn-quiet" onClick={onClose}>Cancel</button><button className="btn btn-primary" type="submit" disabled={!valid||busy}>{busy?"Saving draft…":"Save draft obligation"}</button></div>
+    </form>
+  </Modal>;
+}
+
 function PayPalCheckoutModal({onClose,notify,dbClient,organizationId,clients=[],isAuthenticated=false,onCreated}:any){
   const [clientId,setClientId]=useState("");
   const [amount,setAmount]=useState("10.00");
