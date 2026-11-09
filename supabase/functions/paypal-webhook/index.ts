@@ -184,16 +184,38 @@ Deno.serve(async (request) => {
     let originalEventId: string | null = null;
     if (isRefund || isReversal) {
       if (relatedCaptureId) {
-        const { data: original } = await admin.from("financial_events").select("id")
+        const { data: original } = await admin.from("financial_events").select("id,gross_minor")
           .eq("organization_id", intent.organization_id).eq("source_system", "paypal")
-          .eq("provider_event_id", String(relatedCaptureId)).maybeSingle();
+          .eq("provider_event_id", "capture:" + String(relatedCaptureId)).maybeSingle();
         originalEventId = original?.id ?? null;
       }
     }
 
+    let originalCaptureMinor = Number(intent.amount_minor);
+    let priorRefundMinor = 0;
+    if (originalEventId) {
+      const { data: originalCapture, error: originalError } = await admin.from("financial_events")
+        .select("gross_minor").eq("id", originalEventId).eq("organization_id", intent.organization_id).maybeSingle();
+      if (originalError) throw new Error("Could not verify the original PayPal capture: " + originalError.message);
+      if (originalCapture) originalCaptureMinor = Number(originalCapture.gross_minor || originalCaptureMinor);
+      const { data: priorRefunds, error: priorRefundError } = await admin.from("financial_events")
+        .select("gross_minor").eq("organization_id", intent.organization_id).eq("original_event_id", originalEventId)
+        .in("event_category", ["refund","reversal"]);
+      if (priorRefundError) throw new Error("Could not calculate prior PayPal refunds: " + priorRefundError.message);
+      priorRefundMinor = (priorRefunds ?? []).reduce((sum:any,row:any)=>sum+Number(row.gross_minor||0),0);
+    }
+
+    if ((isRefund || isReversal) && grossMinor + priorRefundMinor > originalCaptureMinor) {
+      throw new Error("PayPal refund/reversal total would exceed the original captured amount.");
+    }
     const direction = isCapture ? "inflow" : "outflow";
     const category = isCapture ? "customer_receipt" : isRefund ? "refund" : "reversal";
     const lifecycle = isCapture ? "paid" : isRefund ? "refunded" : "reversed";
+    const nextIntentStatus = isCapture
+      ? "captured"
+      : isReversal
+        ? "reversed"
+        : (priorRefundMinor + grossMinor >= originalCaptureMinor ? "refunded" : "partially_refunded");
     const { error: financialEventError } = await admin.from("financial_events").insert({
       organization_id: intent.organization_id,
       client_id: intent.client_id,
@@ -212,13 +234,15 @@ Deno.serve(async (request) => {
       description: "PayPal " + type,
       occurred_at: event.create_time || new Date().toISOString(),
       original_event_id: originalEventId,
-      provider_event_id: String(resource.id),
+      provider_event_id: (isCapture ? "capture:" : isRefund ? "refund:" : "reversal:") + String(resource.id),
     });
     if (financialEventError?.code === "23505") {
-      await admin.from("payment_intents").update({
-        provider_capture_id: isCapture ? String(resource.id) : intent.provider_capture_id,
-        lifecycle_status: isCapture ? "captured" : isRefund ? "refunded" : "failed",
-      }).eq("id", intent.id);
+      if (isCapture && !["partially_refunded","refunded","reversed"].includes(intent.lifecycle_status)) {
+        await admin.from("payment_intents").update({
+          provider_capture_id: String(resource.id),
+          lifecycle_status: "captured",
+        }).eq("id", intent.id);
+      }
       await admin.from("provider_webhook_events").update({ processing_status: "processed", processing_started_at: null, processing_error: null, processed_at: new Date().toISOString() }).eq("id", webhookRecord.id);
       return json({ received: true, duplicate_resource: true });
     }
@@ -226,7 +250,7 @@ Deno.serve(async (request) => {
 
     const { error: intentUpdateError } = await admin.from("payment_intents").update({
       provider_capture_id: isCapture ? String(resource.id) : intent.provider_capture_id,
-      lifecycle_status: isCapture ? "captured" : isRefund ? "refunded" : "failed",
+      lifecycle_status: nextIntentStatus,
     }).eq("id", intent.id);
     if (intentUpdateError) throw new Error("Financial event was recorded but the payment intent status could not be updated: " + intentUpdateError.message);
 
