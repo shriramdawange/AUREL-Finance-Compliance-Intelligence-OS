@@ -121,6 +121,7 @@ as $aurel$
 declare
   party_type_value text;
   counterparty_id_value uuid;
+  taxable_numeric numeric;
   taxable_value bigint;
   tax_value bigint;
   cgst_value bigint := 0;
@@ -169,11 +170,15 @@ begin
     raise exception 'Tax mode must be intra-state or inter-state.';
   end if;
 
-  taxable_value := round(p_quantity * p_unit_rate_minor)::bigint;
-  if taxable_value < 0 or taxable_value > 9000000000000000 then
+  taxable_numeric := round(p_quantity * p_unit_rate_minor);
+  if taxable_numeric < 0 or taxable_numeric > 9000000000000000 then
     raise exception 'Taxable value is outside supported limits.';
   end if;
+  taxable_value := taxable_numeric::bigint;
   tax_value := round(taxable_value * p_gst_rate / 100)::bigint;
+  if tax_value > 9000000000000000 then
+    raise exception 'GST amount is outside supported limits.';
+  end if;
   if p_tax_mode = 'intra' then
     cgst_value := floor(tax_value::numeric / 2)::bigint;
     sgst_value := tax_value - cgst_value;
@@ -274,7 +279,7 @@ begin
   update public.trade_documents
   set lifecycle_status = 'invoiced', updated_at = now()
   where id = p_trade_document_id and organization_id = p_organization_id
-    and lifecycle_status = 'approved';
+    and lifecycle_status = 'approved'
   returning id into changed_id;
 
   if changed_id is null then
