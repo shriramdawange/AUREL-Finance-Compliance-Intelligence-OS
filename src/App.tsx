@@ -260,8 +260,9 @@ function App() {
     setJournalEntries([]);
     setBankStatementLines([]);
     setPaymentIntents([]);
+    setTradeDocuments([]);
     (async () => {
-      const [clientResult, documentResult, eventResult, taskResult, journalResult, bankLineResult, paymentResult] = await Promise.all([
+      const [clientResult, documentResult, eventResult, taskResult, journalResult, bankLineResult, paymentResult, tradeDocumentResult] = await Promise.all([
         dbClient.from("clients").select("id,legal_name,entity_type,gstin,state,annual_turnover_minor,status,relationship_manager").eq("organization_id", organizationId).order("created_at", { ascending: false }),
         dbClient.from("source_documents").select("id,original_filename,counterparty_name,document_type,document_date,total_minor,extraction_confidence,status,created_at").eq("organization_id", organizationId).order("created_at", { ascending: false }),
         dbClient.from("financial_events").select("id,occurred_at,counterparty_name,description,cash_direction,gross_minor,fee_minor,event_category,source_system,lifecycle_status").eq("organization_id", organizationId).order("occurred_at", { ascending: false }).limit(100),
@@ -269,9 +270,10 @@ function App() {
         dbClient.from("journal_entries").select("id,journal_number,journal_date,narration,lifecycle_status,created_by,approved_by,journal_lines(debit_minor,credit_minor)").eq("organization_id", organizationId).order("journal_date", { ascending: false }).limit(100),
         dbClient.from("bank_statement_lines").select("id,client_id,transaction_date,narration,debit_minor,credit_minor,external_line_id,statement_import_id,financial_account_id").eq("organization_id", organizationId).order("transaction_date", { ascending: false }).limit(500),
         dbClient.from("payment_intents").select("id,client_id,provider,amount_minor,currency_code,description,lifecycle_status,created_at").eq("organization_id",organizationId).order("created_at",{ascending:false}).limit(100),
+        dbClient.from("trade_documents").select("id,client_id,document_kind,document_number,document_date,due_date,taxable_minor,cgst_minor,sgst_minor,igst_minor,total_minor,settled_minor,currency_code,lifecycle_status,created_by,counterparties(display_name)").eq("organization_id",organizationId).order("document_date",{ascending:false}).limit(500),
       ]);
       if (!active) return;
-      const errors = [clientResult.error, documentResult.error, eventResult.error, taskResult.error, journalResult.error, bankLineResult.error, paymentResult.error].filter(Boolean);
+      const errors = [clientResult.error, documentResult.error, eventResult.error, taskResult.error, journalResult.error, bankLineResult.error, paymentResult.error, tradeDocumentResult.error].filter(Boolean);
       if (errors.length) notify("Some live records could not be loaded. Check the database schema and RLS policies.");
       setClients((clientResult.data ?? []).map((row: any) => ({
         id: row.id, name: row.legal_name, type: String(row.entity_type).replace(/_/g, " ").replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
@@ -322,6 +324,19 @@ function App() {
         description:row.description,status:String(row.lifecycle_status).replace(/_/g," ").replace(/\\b\\w/g,(ch:string)=>ch.toUpperCase()),
         lifecycle_status:row.lifecycle_status,created_at:row.created_at,
       })));
+      setTradeDocuments((tradeDocumentResult.data ?? []).map((row:any)=>{
+        const party=Array.isArray(row.counterparties)?row.counterparties[0]:row.counterparties;
+        return {
+          id:row.id,client:clientById.get(row.client_id)||"Client record",
+          counterparty:party?.display_name||"Unspecified counterparty",
+          kind:row.document_kind,number:row.document_number,date:row.document_date,due:row.due_date||"—",
+          taxable:Number(row.taxable_minor||0),cgst:Number(row.cgst_minor||0),sgst:Number(row.sgst_minor||0),
+          igst:Number(row.igst_minor||0),total:Number(row.total_minor||0),settled:Number(row.settled_minor||0),
+          currency:String(row.currency_code||"INR").trim(),lifecycle_status:row.lifecycle_status,
+          created_by:row.created_by,status:String(row.lifecycle_status).replace(/_/g," ").replace(/\b\w/g,(ch:string)=>ch.toUpperCase()),
+        };
+      }));
+
 ;
     })();
     return () => { active = false; };
