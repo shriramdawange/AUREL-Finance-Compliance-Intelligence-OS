@@ -193,6 +193,36 @@ function App() {
     })));
   };
 
+  const refreshTradeDocuments = async () => {
+    if (!dbClient || !isAuthenticated || !organizationId) return;
+    const { data, error } = await dbClient.from("trade_documents")
+      .select("id,client_id,document_kind,document_number,document_date,due_date,taxable_minor,cgst_minor,sgst_minor,igst_minor,total_minor,settled_minor,currency_code,lifecycle_status,created_by,counterparties(display_name)")
+      .eq("organization_id",organizationId).order("document_date",{ascending:false}).limit(500);
+    if(error){notify("Trade documents could not be refreshed: "+error.message);return;}
+    const clientById=new Map(clients.map((client:any)=>[client.id,client.name]));
+    setTradeDocuments((data??[]).map((row:any)=>{
+      const party=Array.isArray(row.counterparties)?row.counterparties[0]:row.counterparties;
+      return {
+        id:row.id,client:clientById.get(row.client_id)||"Client record",
+        counterparty:party?.display_name||"Unspecified counterparty",
+        kind:row.document_kind,number:row.document_number,date:row.document_date,due:row.due_date||"—",
+        taxable:Number(row.taxable_minor||0),cgst:Number(row.cgst_minor||0),sgst:Number(row.sgst_minor||0),
+        igst:Number(row.igst_minor||0),total:Number(row.total_minor||0),settled:Number(row.settled_minor||0),
+        currency:String(row.currency_code||"INR").trim(),lifecycle_status:row.lifecycle_status,
+        created_by:row.created_by,status:String(row.lifecycle_status).replace(/_/g," ").replace(/\b\w/g,(ch:string)=>ch.toUpperCase()),
+      };
+    }));
+  };
+
+  const runTradeDocumentAction = async (document:any, action:"approve"|"issue") => {
+    if(!dbClient||!organizationId)return;
+    const rpc=action==="approve"?"approve_trade_document":"issue_trade_document";
+    const {error}=await dbClient.rpc(rpc,{p_organization_id:organizationId,p_trade_document_id:document.id});
+    if(error){notify("Trade document action failed: "+error.message);return;}
+    notify(action==="approve"?"Trade document approved.":"Trade document issued.");
+    await refreshTradeDocuments();
+  };
+
   const cancelPaymentIntent = async (intent:any) => {
     if(!dbClient||!organizationId)return;
     const {data,error}=await dbClient.functions.invoke("cancel-paypal-order",{body:{organization_id:organizationId,payment_intent_id:intent.id}});
