@@ -11,7 +11,8 @@ declare
     'post_approved_journal(uuid,uuid)',
     'get_trial_balance(uuid,uuid,date)',
     'get_profit_and_loss(uuid,uuid,date,date)',
-    'get_balance_sheet(uuid,uuid,date)'
+    'get_balance_sheet(uuid,uuid,date)',
+    'import_bank_statement_rows(uuid,uuid,uuid,uuid,jsonb)'
   ];
   function_signature text;
 begin
@@ -45,7 +46,7 @@ begin
       and p.proname in (
         'ensure_default_chart_of_accounts','create_journal_draft',
         'submit_journal_for_review','approve_journal','post_approved_journal',
-        'get_trial_balance','get_profit_and_loss','get_balance_sheet'
+        'get_trial_balance','get_profit_and_loss','get_balance_sheet','import_bank_statement_rows'
       )
       and p.prosecdef
   ) then
@@ -67,6 +68,6 @@ where n.nspname = 'public'
   and p.proname in (
     'ensure_default_chart_of_accounts','create_journal_draft',
     'submit_journal_for_review','approve_journal','post_approved_journal',
-    'get_trial_balance','get_profit_and_loss','get_balance_sheet'
+    'get_trial_balance','get_profit_and_loss','get_balance_sheet','import_bank_statement_rows'
   )
 order by p.proname;
