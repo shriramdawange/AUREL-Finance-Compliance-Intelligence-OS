@@ -60,10 +60,12 @@ Deno.serve(async (request) => {
       return json({ error: "Only an unpaid payment request can be cancelled." }, 409, cors ?? {});
     }
 
-    const { error: updateError } = await admin.from("payment_intents").update({ lifecycle_status: "cancelled" })
+    const { data: updatedIntent, error: updateError } = await admin.from("payment_intents").update({ lifecycle_status: "cancelled" })
       .eq("id", intent.id).eq("organization_id", organizationId)
-      .in("lifecycle_status", ["created","approval_pending"]);
+      .in("lifecycle_status", ["created","approval_pending"])
+      .select("id").maybeSingle();
     if (updateError) throw new Error("Payment request could not be cancelled: " + updateError.message);
+    if (!updatedIntent) return json({ error: "The payment request changed state before cancellation. Refresh the payment register." }, 409, cors ?? {});
 
     return json({ payment_intent_id: intent.id, status: "cancelled" }, 200, cors ?? {});
   } catch (error) {
