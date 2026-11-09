@@ -110,6 +110,7 @@ function App() {
   const [journalEntries,setJournalEntries] = useState<any[]>([]);
   const [bankStatementLines,setBankStatementLines] = useState<any[]>([]);
   const [paymentIntents,setPaymentIntents] = useState<any[]>([]);
+  const [tradeDocuments,setTradeDocuments] = useState<any[]>([]);
   const paypalCallbackHandled = useRef(false);
   const [assistantOpen,setAssistantOpen] = useState(false);
   const [mobileOpen,setMobileOpen] = useState(false);
