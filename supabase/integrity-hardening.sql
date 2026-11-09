@@ -39,6 +39,68 @@ drop trigger if exists journal_entries_balance_before_post on public.journal_ent
 create trigger journal_entries_balance_before_post
 before insert or update of lifecycle_status on public.journal_entries
 for each row execute function private.assert_journal_balanced();
+ 
+-- Enforce lifecycle order at the database boundary; UI/RPC checks are not enough.
+create or replace function private.guard_journal_entry_lifecycle()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $
+begin
+  if tg_op = 'INSERT' then
+    if new.lifecycle_status <> 'draft' then
+      raise exception 'Journal entries must be created as drafts.';
+    end if;
+    return new;
+  end if;
+
+  if old.lifecycle_status = 'posted' then
+    raise exception 'Posted journals are immutable.';
+  end if;
+
+  if new.lifecycle_status = old.lifecycle_status then
+    if old.lifecycle_status <> 'draft' then
+      raise exception 'Only draft journals may be edited.';
+    end if;
+    return new;
+  end if;
+
+  if old.lifecycle_status = 'draft' and new.lifecycle_status = 'pending_review' then
+    if (to_jsonb(new) - 'lifecycle_status' - 'updated_at')
+       is distinct from (to_jsonb(old) - 'lifecycle_status' - 'updated_at') then
+      raise exception 'Submitting a journal cannot change its accounting content.';
+    end if;
+    return new;
+  end if;
+
+  if old.lifecycle_status = 'pending_review' and new.lifecycle_status = 'approved' then
+    if (to_jsonb(new) - 'lifecycle_status' - 'approved_by' - 'updated_at')
+       is distinct from (to_jsonb(old) - 'lifecycle_status' - 'approved_by' - 'updated_at') then
+      raise exception 'Approving a journal cannot change its accounting content.';
+    end if;
+    return new;
+  end if;
+
+  if old.lifecycle_status = 'approved' and new.lifecycle_status = 'posted' then
+    if (to_jsonb(new) - 'lifecycle_status' - 'posted_at' - 'updated_at')
+       is distinct from (to_jsonb(old) - 'lifecycle_status' - 'posted_at' - 'updated_at') then
+      raise exception 'Posting a journal cannot change its accounting content.';
+    end if;
+    return new;
+  end if;
+
+  raise exception 'Invalid journal lifecycle transition: % -> %.', old.lifecycle_status, new.lifecycle_status;
+end;
+$;
+
+drop trigger if exists journal_entries_lifecycle_guard on public.journal_entries;
+create trigger journal_entries_lifecycle_guard
+before insert or update on public.journal_entries
+for each row execute function private.guard_journal_entry_lifecycle();
+
+revoke all on function private.guard_journal_entry_lifecycle() from public, anon, authenticated;
+
 
 -- A journal line may only be added, edited or removed while its parent entry is a draft.
 -- FOR UPDATE serializes line changes against the parent journal being posted.
@@ -52,7 +114,14 @@ declare
   parent_status text;
   parent_org uuid;
   parent_id uuid;
+  parent_client uuid;
 begin
+  if tg_op = 'UPDATE'
+     and (new.organization_id is distinct from old.organization_id
+       or new.journal_entry_id is distinct from old.journal_entry_id) then
+    raise exception 'Journal lines cannot be moved between journals or organisations.';
+  end if;
+
   if tg_op = 'DELETE' then
     parent_id := old.journal_entry_id;
     parent_org := old.organization_id;
@@ -61,7 +130,8 @@ begin
     parent_org := new.organization_id;
   end if;
 
-  select lifecycle_status into parent_status
+  select lifecycle_status, client_id
+    into parent_status, parent_client
   from public.journal_entries
   where id = parent_id and organization_id = parent_org
   for update;
@@ -70,10 +140,20 @@ begin
     raise exception 'Journal lines can only be changed while the journal is a draft.';
   end if;
 
+  if tg_op <> 'DELETE' and not exists (
+    select 1 from public.accounts a
+    where a.id = new.account_id
+      and a.organization_id = parent_org
+      and a.client_id = parent_client
+      and a.is_active
+  ) then
+    raise exception 'Journal lines must use active accounts belonging to the same client and organisation.';
+  end if;
+
   if tg_op = 'DELETE' then return old; end if;
   return new;
 end;
-$$;
+$;
 
 drop trigger if exists journal_lines_draft_only on public.journal_lines;
 create trigger journal_lines_draft_only
@@ -90,6 +170,26 @@ for insert to authenticated
 with check (
   lifecycle_status = 'draft'
   and private.has_org_role(organization_id, array['owner','admin','manager','preparer'])
+);
+
+drop policy if exists journal_entries_update_draft on public.journal_entries;
+create policy journal_entries_update_draft on public.journal_entries
+for update to authenticated
+using (
+  (lifecycle_status = 'draft'
+    and private.has_org_role(organization_id, array['owner','admin','manager','preparer']))
+  or (lifecycle_status = 'pending_review'
+    and private.has_org_role(organization_id, array['owner','admin','manager','reviewer']))
+  or (lifecycle_status = 'approved'
+    and private.has_org_role(organization_id, array['owner','admin','manager']))
+)
+with check (
+  (lifecycle_status in ('draft','pending_review')
+    and private.has_org_role(organization_id, array['owner','admin','manager','preparer']))
+  or (lifecycle_status = 'approved'
+    and private.has_org_role(organization_id, array['owner','admin','manager','reviewer']))
+  or (lifecycle_status = 'posted'
+    and private.has_org_role(organization_id, array['owner','admin','manager']))
 );
 
 grant delete on public.journal_lines to authenticated;
