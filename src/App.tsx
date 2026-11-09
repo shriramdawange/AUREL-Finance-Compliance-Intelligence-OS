@@ -14,6 +14,7 @@ import {
   Tooltip, XAxis, YAxis
 } from "recharts";
 import { inr, rupees, validateJournal, mask } from "./lib/money";
+import { hashHexToUuid, parseBankStatementDate, parseCsv, parseRupeeMinor, sha256Hex } from "./lib/csv";
 import { useAurelSession } from "./components/AuthGate";
 
 type Client = { id: string; name: string; type: string; gstin: string; state: string; turnover: number; status: string; owner: string; tasks: number };
@@ -119,6 +120,23 @@ function App() {
   ]);
   const [chatInput,setChatInput] = useState("");
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""),2800); };
+  const refreshTransactions = async () => {
+    if (!dbClient || !isAuthenticated || !organizationId) return;
+    const { data, error } = await dbClient.from("financial_events")
+      .select("id,occurred_at,counterparty_name,description,cash_direction,gross_minor,fee_minor,event_category,source_system,lifecycle_status")
+      .eq("organization_id", organizationId).order("occurred_at", { ascending: false }).limit(100);
+    if (error) { notify("Transactions could not be refreshed: " + error.message); return; }
+    setTransactions((data ?? []).map((row:any) => ({
+      id: row.id, date: String(row.occurred_at).slice(0,10),
+      party: row.counterparty_name || "Unspecified counterparty",
+      description: row.description || row.event_category,
+      direction: row.cash_direction === "inflow" ? "in" : "out",
+      gross: Number(row.gross_minor || 0), fee: Number(row.fee_minor || 0),
+      category: row.event_category, source: row.source_system,
+      status: String(row.lifecycle_status).replace(/_/g," ").replace(/\\b\\w/g,(ch:string)=>ch.toUpperCase()),
+    })));
+  };
+
   const refreshJournals = async () => {
     if (!dbClient || !isAuthenticated || !organizationId) return;
     const { data, error } = await dbClient.from("journal_entries")
@@ -310,7 +328,7 @@ function App() {
     <button className="assistant-fab" onClick={()=>setAssistantOpen(!assistantOpen)}><Sparkles size={17}/><span>AUREL Agent</span></button>
     {assistantOpen&&<aside className="assistant-panel"><div className="assistant-head"><div className="agent-mark"><Sparkles size={17}/></div><div><b>AUREL Agent</b><span>{isAuthenticated ? "Secure session · limited data tools" : "Finance intelligence · Demo mode"}</span></div><button className="icon-btn" onClick={()=>setAssistantOpen(false)}><X size={17}/></button></div><div className="agent-trust"><ShieldCheck size={14}/> {isAuthenticated ? "Live client/document adapters are connected. Financial and tax metric tools are not connected." : "Answers use sample metrics and link to supporting screens."}</div><div className="chat-stream">{chat.map((m,i)=><div className={"chat-message "+m.role} key={i}><div className="chat-avatar">{m.role==="assistant"?<Sparkles size={13}/>:<UserRound size={13}/>}</div><div><div className="chat-bubble">{m.text}</div>{m.source&&<button className="source-link" onClick={()=>{go(m.source!.replace("/",""));setAssistantOpen(false);}}>View supporting records <ArrowUpRight size={12}/></button>}</div></div>)}</div><div className="suggestions"><span>TRY ASKING</span>{["Why did spend rise this month?","Summarise October cash flow","What needs GST review?"].map(x=><button key={x} onClick={()=>respond(x)}>{x}<ArrowUpRight size={12}/></button>)}</div><form className="chat-composer" onSubmit={e=>{e.preventDefault();respond(chatInput);}}><input value={chatInput} onChange={e=>setChatInput(e.target.value)} placeholder="Ask about your business..." /><button type="submit"><Send size={15}/></button></form></aside>}
     {modal==="client"&&<Modal title="Add a client" subtitle="Create a secure workspace for a new business entity." onClose={()=>setModal("")}><form className="form-grid" onSubmit={addClient}><label className="full">Legal business name<input name="name" placeholder="e.g. Meridian Components Pvt. Ltd." required /></label><label>Entity type<select name="type"><option>Proprietorship</option><option>Partnership</option><option>LLP</option><option>Private Limited</option><option>Individual</option></select></label><label>State<select name="state"><option>Maharashtra</option><option>Karnataka</option><option>Gujarat</option><option>Delhi</option><option>Telangana</option></select></label><label className="full">GSTIN <span className="optional">Optional for onboarding</span><input name="gstin" placeholder="Enter GSTIN" maxLength={15}/></label><div className="modal-note full"><LockKeyhole size={14}/> Sensitive identifiers are masked in the interface. {isAuthenticated ? "Client details are stored in the selected organisation." : "Demo form only; data is not saved to a backend."}</div><div className="modal-actions full"><button type="button" className="btn btn-quiet" onClick={()=>setModal("")}>Cancel</button><button className="btn btn-primary" type="submit"><Plus size={15}/> Create client</button></div></form></Modal>}
-    {modal==="import"&&<Modal title="Import transactions" subtitle="Preview a CSV and map its columns before bringing records into the workspace." onClose={()=>setModal("")}><div className="upload-zone"><Upload size={22}/><b>Drop a bank CSV here</b><span>or choose a file from your device</span><input type="file" accept=".csv,text/csv" onChange={()=>notify("CSV selected in demo mode. No records were uploaded to a server.")}/></div><div className="mapping-grid"><div><span>DATE COLUMN</span><b>Transaction date</b></div><div><span>DESCRIPTION</span><b>Narration</b></div><div><span>DEBIT / CREDIT</span><b>Amount direction</b></div></div><div className="modal-note"><AlertCircle size={14}/> A preview and mapping simulation is shown. No bank connection or server-side import is active.</div><div className="modal-actions"><button className="btn btn-quiet" onClick={()=>setModal("")}>Cancel</button><button className="btn btn-primary" onClick={()=>{setModal("");notify("Import mapping preview confirmed. Demo only.");}}>Review mapping</button></div></Modal>}
+    {modal==="import"&&<BankImportModal onClose={()=>setModal("")} notify={notify} dbClient={dbClient} organizationId={organizationId} clients={clients} isAuthenticated={isAuthenticated} onImported={refreshTransactions}/>}
     {modal==="upload"&&<Modal title="Upload source documents" subtitle="Add bills, invoices, receipts or statements to the sample inbox." onClose={()=>setModal("")}><div className="upload-zone"><Upload size={22}/><b>Choose documents to add</b><span>PDF, JPG, PNG, CSV or XLSX · {isAuthenticated ? "private organisation storage" : "browser-only demo"}</span><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.csv,.xlsx" onChange={e=>{uploadDocs(e.target.files);setModal("");}} /></div><div className="modal-note"><LockKeyhole size={14}/>{isAuthenticated ? "Files are stored in the private organisation bucket. OCR/extraction is not connected yet." : "Files are not sent to a server in this demo. Production uploads require secure storage and malware scanning."}</div><div className="modal-actions"><button className="btn btn-quiet" onClick={()=>setModal("")}>Close</button></div></Modal>}{modal==="generic"&&<Modal title="Create a draft record" subtitle="This action creates a local demonstration draft only." onClose={()=>setModal("")}><form className="form-grid" onSubmit={e=>{e.preventDefault();setModal("");notify("Draft record created in the current demo session.");}}><label className="full">Record name<input required placeholder="Enter a short record description"/></label><label>Effective date<input type="date" defaultValue="2026-11-09"/></label><label>Owner<select defaultValue="Ananya Sen"><option>Ananya Sen</option><option>Priya Nair</option><option>Rahul Iyer</option></select></label><div className="modal-note full"><AlertCircle size={14}/> Drafts are not posted to accounting records and are not persisted to a backend.</div><div className="modal-actions full"><button type="button" className="btn btn-quiet" onClick={()=>setModal("")}>Cancel</button><button className="btn btn-primary" type="submit">Save demo draft</button></div></form></Modal>}{modal==="journal"&&<JournalModal onClose={()=>setModal("")} notify={notify} dbClient={dbClient} organizationId={organizationId} clients={clients} isAuthenticated={isAuthenticated} onSaved={(entry:any)=>setJournalEntries((previous:any[])=>[entry,...previous.filter((row:any)=>row.id!==entry.id)])}/>}
     {selected&&<div className="detail-backdrop" onClick={()=>setSelected(null)}><aside className="detail-panel" onClick={e=>e.stopPropagation()}><div className="detail-head"><div><span className="eyebrow">RECORD DETAIL</span><h3>{selected.name||selected.party||selected.title||selected.id}</h3></div><button className="icon-btn" onClick={()=>setSelected(null)}><X size={17}/></button></div><div className="detail-body"><div className="detail-tag">Sample record · Read only source context</div>{Object.entries(selected).map(([key,value])=><div className="detail-field" key={key}><span>{key.replace(/([A-Z])/g," $1")}</span><b>{typeof value==="number"&&key.toLowerCase().includes("amount")?inr(value):String(value)}</b></div>)}</div>{String(selected.id||"").startsWith("DOC-")&&<div className="detail-actions"><button className="btn btn-primary" onClick={()=>{setDocuments(documents.map((d:any)=>d.id===selected.id?{...d,status:"Approved"}:d));setSelected(null);notify("Extraction approved in demo session. Accounting posting remains a separate review step.");}}><Check size={14}/> Approve extraction</button><button className="btn btn-quiet" onClick={()=>{setDocuments(documents.map((d:any)=>d.id===selected.id?{...d,status:"Rejected"}:d));setSelected(null);notify("Extraction rejected in demo session.");}}>Reject</button></div>}<button className="btn btn-quiet detail-close" onClick={()=>setSelected(null)}>Close detail</button></aside></div>}
     {toast&&<div className="toast"><CheckCircle2 size={16}/>{toast}</div>}
@@ -403,6 +421,126 @@ function JournalModal({onClose,notify,dbClient,organizationId,clients=[],isAuthe
     <div className="modal-actions full"><button type="button" className="btn btn-quiet" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!verdict.balanced||saving||(isAuthenticated&&(!debitAccount||!creditAccount||!clientId))} onClick={save}>{saving?"Saving…":"Save draft"}</button></div>
   </div></Modal>;
 }
+function BankImportModal({onClose,notify,dbClient,organizationId,clients=[],isAuthenticated=false,onImported}:any){
+  const [file,setFile]=useState<File|null>(null);
+  const [headers,setHeaders]=useState<string[]>([]);
+  const [rows,setRows]=useState<string[][]>([]);
+  const [mapping,setMapping]=useState({date:-1,narration:-1,debit:-1,credit:-1});
+  const [clientId,setClientId]=useState(clients[0]?.id||"");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const [result,setResult]=useState<any>(null);
+
+  useEffect(()=>{
+    if(clients.length&&!clients.some((client:any)=>client.id===clientId))setClientId(clients[0].id);
+  },[clients,clientId]);
+
+  const prepared=useMemo(()=>rows.map((row,index)=>{
+    const cell=(column:number)=>column>=0?String(row[column]??"").trim():"";
+    const date=parseBankStatementDate(cell(mapping.date));
+    const narration=cell(mapping.narration);
+    const debit=parseRupeeMinor(cell(mapping.debit));
+    const credit=parseRupeeMinor(cell(mapping.credit));
+    const problems:string[]=[];
+    if(!date)problems.push("Invalid transaction date");
+    if(!narration||narration.length>1000)problems.push("Missing or overlong narration");
+    if(debit===null||credit===null)problems.push("Invalid debit/credit amount");
+    if(debit!==null&&credit!==null&&!((debit>0&&credit===0)||(credit>0&&debit===0)))problems.push("Set either debit or credit amount (not both)");
+    return {index,row,date,narration,debit,credit,problems};
+  }),[rows,mapping]);
+  const validRows=prepared.filter(row=>row.problems.length===0);
+  const invalidRows=prepared.filter(row=>row.problems.length>0);
+
+  const infer=(names:string[],patterns:RegExp[])=>names.findIndex(name=>patterns.some(pattern=>pattern.test(name.toLowerCase().replace(/[_-]+/g," "))));
+  const loadFile=async(selected:File|null)=>{
+    setError("");setResult(null);setFile(selected);setHeaders([]);setRows([]);
+    if(!selected)return;
+    if(selected.size>10*1024*1024){setError("CSV is larger than 10 MB. Split the statement into smaller files.");return;}
+    try{
+      const parsed=parseCsv(await selected.text());
+      if(parsed.length<2){setError("The CSV must contain a header row and at least one transaction.");return;}
+      const columnNames=parsed[0].map((value,index)=>value.trim()||"Column "+(index+1));
+      const data=parsed.slice(1).filter(row=>row.some(value=>value.trim()));
+      if(data.length>5000){setError("This import contains more than 5,000 rows. Split it into smaller files.");return;}
+      setHeaders(columnNames);setRows(data);
+      setMapping({
+        date:infer(columnNames,[/date/,/txn dt/,/value dt/]),
+        narration:infer(columnNames,[/narration/,/description/,/particular/,/remarks/,/details/]),
+        debit:infer(columnNames,[/^debit/,/withdrawal/,/paid out/]),
+        credit:infer(columnNames,[/^credit/,/deposit/,/paid in/]),
+      });
+    }catch(parseError){
+      setError(parseError instanceof Error?parseError.message:"Could not parse the CSV file.");
+    }
+  };
+
+  const importRows=async()=>{
+    setError("");setResult(null);
+    if(!file||!rows.length){setError("Choose a statement CSV first.");return;}
+    if(mapping.date<0||mapping.narration<0||mapping.debit<0||mapping.credit<0){setError("Map date, narration, debit and credit columns before importing.");return;}
+    if(invalidRows.length){setError("Fix the column mappings or source rows. Import is atomic; invalid rows will not be silently skipped.");return;}
+    if(!isAuthenticated){setResult({demo:true,valid:validRows.length});notify("CSV preview validated. Demo mode does not persist statement rows.");return;}
+    if(!dbClient||!organizationId||!clientId){setError("Select a connected organisation client before importing.");return;}
+    setBusy(true);
+    try{
+      const fileHash=await sha256Hex(await file.arrayBuffer());
+      const statementImportId=hashHexToUuid(fileHash);
+      const payload=[];
+      for(const item of validRows){
+        const rowHash=await sha256Hex(JSON.stringify([item.index,item.row]));
+        payload.push({
+          external_line_id:"csv:"+rowHash,
+          transaction_date:item.date,
+          narration:item.narration,
+          debit_minor:item.debit,
+          credit_minor:item.credit,
+          source_row:{headers,values:item.row},
+        });
+      }
+      const {data,error:importError}=await dbClient.rpc("import_bank_statement_rows",{
+        p_organization_id:organizationId,
+        p_client_id:clientId,
+        p_financial_account_id:null,
+        p_statement_import_id:statementImportId,
+        p_rows:payload,
+      });
+      if(importError)throw new Error(importError.message);
+      setResult({demo:false,...data});
+      await onImported?.();
+      notify("Bank statement imported. Each row is stored as evidence and a reviewable cash event.");
+    }catch(importError){
+      setError(importError instanceof Error?importError.message:"Bank statement import failed.");
+    }finally{
+      setBusy(false);
+    }
+  };
+
+  const renderColumn=(label:string,key:"date"|"narration"|"debit"|"credit")=><label>{label}
+    <select value={mapping[key]} onChange={event=>setMapping(current=>({...current,[key]:Number(event.target.value)}))}>
+      <option value={-1}>Select column</option>
+      {headers.map((header,index)=><option key={index} value={index}>{header}</option>)}
+    </select>
+  </label>;
+
+  return <Modal title="Import bank statement" subtitle="Map a CSV, validate every row and import source-backed statement evidence." onClose={onClose}>
+    <div className="form-grid">
+      {isAuthenticated&&<label className="full">Client / entity<select value={clientId} onChange={event=>setClientId(event.target.value)}>{clients.map((client:any)=><option key={client.id} value={client.id}>{client.name}</option>)}</select></label>}
+      <label className="full">Statement CSV<input type="file" accept=".csv,text/csv" onChange={event=>loadFile(event.target.files?.[0]??null)}/></label>
+      {file&&<div className="modal-note full"><FileSpreadsheet size={14}/>{file.name} · {(file.size/1024).toFixed(1)} KB · {rows.length.toLocaleString("en-IN")} data rows</div>}
+      {headers.length>0&&<>
+        <div className="full eyebrow">COLUMN MAPPING</div>
+        <div className="csv-mapping-grid full">{renderColumn("Transaction date","date")}{renderColumn("Description / narration","narration")}{renderColumn("Debit amount (INR)","debit")}{renderColumn("Credit amount (INR)","credit")}</div>
+        <div className="mini-stats full"><MiniStat label="Rows detected" value={String(rows.length)} sub="CSV data rows"/><MiniStat label="Valid rows" value={String(validRows.length)} sub="Ready to import"/><MiniStat label="Invalid rows" value={String(invalidRows.length)} sub="Must be corrected"/><MiniStat label="Import mode" value={isAuthenticated?"Live":"Preview"} sub={isAuthenticated?"Organisation-scoped":"No database writes"}/></div>
+        <div className="csv-preview-wrap full"><table className="data-table"><thead><tr><th>ROW</th><th>DATE</th><th>NARRATION</th><th>DEBIT</th><th>CREDIT</th><th>VALIDATION</th></tr></thead><tbody>{prepared.slice(0,6).map(item=><tr key={item.index}><td>{item.index+1}</td><td>{item.date||"—"}</td><td>{item.narration||"—"}</td><td>{item.debit===null?"Invalid":inr(item.debit)}</td><td>{item.credit===null?"Invalid":inr(item.credit)}</td><td><Status value={item.problems.length?"Invalid":"Valid"}/></td></tr>)}</tbody></table>{rows.length>6&&<small>Showing first 6 of {rows.length.toLocaleString("en-IN")} rows.</small>}</div>
+      </>}
+      {error&&<div className="auth-alert error full">{error}</div>}
+      {result&&<div className="modal-note full"><CheckCircle2 size={15}/>{result.demo?("Demo validation passed for "+result.valid+" rows; no records were saved."):("Imported "+Number(result.statement_lines_inserted||0)+" statement lines and created "+Number(result.financial_events_created||0)+" financial events; skipped "+Number(result.duplicate_lines_skipped||0)+" duplicates.")}</div>}
+      {isAuthenticated&&<div className="modal-note full"><ShieldCheck size={14}/>Imported credits/debits are recorded as cash movement with category “other”. They are not assumed to be sales, revenue or expenses. Reconciliation and accounting review remain separate.</div>}
+      <div className="modal-actions full"><button className="btn btn-quiet" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy||!file||!rows.length||invalidRows.length>0||!headers.length||(isAuthenticated&&!clientId)} onClick={importRows}>{busy?"Importing…":isAuthenticated?"Import statement":"Validate preview"}</button></div>
+    </div>
+  </Modal>;
+}
+
 function ModulePage({section,clients,documents,transactions,recon,tasks,journalEntries=[],selected,isAuthenticated=false,dbClient,organizationId,period="Oct 2026",onJournalRefresh,setSelected,setModal,notify,go,exportCsv,setRecon,setTasks,uploadDocs}:any){
   const [query,setQuery]=useState("");const [tab,setTab]=useState("Overview");const [filter,setFilter]=useState("All");const [resolved,setResolved]=useState<string[]>([]);
   const [reportClientId,setReportClientId]=useState(clients[0]?.id||"");const [reportRows,setReportRows]=useState<any[]>([]);
