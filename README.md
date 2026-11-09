@@ -34,7 +34,7 @@ The application is a React + TypeScript + Vite product prototype with a polished
 - GitHub Actions TypeScript and Vite production-build workflow.
 
 **Still prototype/demo-only:**
-- General Ledger, Cash Flow, Banking imports, Sales/Purchases, Payables/Receivables, GST/ITC, TDS/TCS, Income Tax, compliance analytics and forecasts remain illustrative or unconnected workbenches until their domain services are wired. Trial Balance, P&L and Balance Sheet have report RPC source but require the SQL scripts to be applied.
+- Sales/Purchases, Payables/Receivables ageing, automated reconciliation, classified Cash Flow, GST/ITC, TDS/TCS, Income Tax, compliance analytics, forecasts and the AI Agent remain illustrative or unconnected workbenches until their domain services are wired. The live Cash Flow view currently shows cash/bank ledger movements only. General Ledger, Trial Balance, P&L and Balance Sheet have RPC source but require SQL deployment and behavioural validation.
 - AUREL Agent responses remain demo-limited; authenticated mode refuses to invent live financial metrics.
 - CSV bank import is currently a mapping simulation, not a durable ingestion pipeline.
 - Invoice OCR/extraction is not connected. Uploaded source documents remain unclassified until an extraction provider and review service are implemented.
@@ -106,7 +106,7 @@ The source code and SQL baseline are committed, but an AUREL-specific Supabase p
 | Supabase Auth | UI and client wiring implemented | Dedicated project, provider settings, RLS tests and deployment |
 | Supabase Database | Baseline schema, RLS and core accounting RPC source committed | Provision project, apply all SQL scripts, expose Data API objects, advisors and integration tests |
 | Supabase Storage | Private bucket and upload adapter implemented | Provision bucket, test access denial, retention and malware scanning |
-| PayPal | Sandbox create/capture + signed webhook function source committed | Configure REST app, server secrets, webhook subscription, deploy and end-to-end test |
+| PayPal | Sandbox create/capture/cancel UI and Edge Function source; retryable signed webhook | Configure REST app, server secrets, webhook subscription, deploy all four functions and run end-to-end Sandbox tests |
 | Bank data | CSV mapping simulation | Statement parser, idempotent import, provider/AA connector |
 | OCR | Not connected | Provider choice, extraction schema validation, duplicate check and human review |
 | GST / ITC | Workpaper prototype | Versioned rules, GSTR-2B data provider, reviewer QC and authorised filing workflow |
