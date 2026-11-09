@@ -1,10 +1,10 @@
--- AUREL integrity hardening. Included by bootstrap.sql in the baseline release.
+-- AUREL integrity hardening. Run after bootstrap.sql on a new AUREL project.
 
 -- Provider payloads are private server-side intake records only.
 revoke all on table public.provider_webhook_events from public, anon, authenticated;
 grant all on table public.provider_webhook_events to service_role;
 
--- Prevent a journal from being marked posted unless it is a balanced double-entry journal.
+-- Prevent posting a journal unless it is a balanced double-entry journal.
 create or replace function private.assert_journal_balanced()
 returns trigger
 language plpgsql
@@ -16,8 +16,11 @@ declare
   debit_total bigint;
   credit_total bigint;
 begin
-  if new.lifecycle_status = 'posted'
-     and (tg_op = 'INSERT' or old.lifecycle_status is distinct from 'posted') then
+  if new.lifecycle_status = 'posted' then
+    if tg_op = 'UPDATE' and old.lifecycle_status = 'posted' then
+      return new;
+    end if;
+
     select count(*), coalesce(sum(debit_minor), 0), coalesce(sum(credit_minor), 0)
       into line_count, debit_total, credit_total
     from public.journal_lines
@@ -38,6 +41,7 @@ before insert or update of lifecycle_status on public.journal_entries
 for each row execute function private.assert_journal_balanced();
 
 -- A journal line may only be added, edited or removed while its parent entry is a draft.
+-- FOR UPDATE serializes line changes against the parent journal being posted.
 create or replace function private.guard_journal_line_mutation()
 returns trigger
 language plpgsql
@@ -59,7 +63,8 @@ begin
 
   select lifecycle_status into parent_status
   from public.journal_entries
-  where id = parent_id and organization_id = parent_org;
+  where id = parent_id and organization_id = parent_org
+  for update;
 
   if parent_status is distinct from 'draft' then
     raise exception 'Journal lines can only be changed while the journal is a draft.';
@@ -77,6 +82,15 @@ for each row execute function private.guard_journal_line_mutation();
 
 revoke all on function private.assert_journal_balanced() from public, anon, authenticated;
 revoke all on function private.guard_journal_line_mutation() from public, anon, authenticated;
+
+-- Bootstrap entries must start as drafts; a privileged server-side workflow posts them.
+drop policy if exists journal_entries_insert_operator on public.journal_entries;
+create policy journal_entries_insert_operator on public.journal_entries
+for insert to authenticated
+with check (
+  lifecycle_status = 'draft'
+  and private.has_org_role(organization_id, array['owner','admin','manager','preparer'])
+);
 
 grant delete on public.journal_lines to authenticated;
 drop policy if exists journal_lines_delete_draft on public.journal_lines;
@@ -107,7 +121,7 @@ for update to authenticated using (
   )
 );
 
--- A PayPal capture may create at most one canonical cash event for a given resource ID.
+-- A PayPal capture/resource can create at most one canonical cash event in an organisation.
 create unique index if not exists financial_events_provider_resource_idx
   on public.financial_events (organization_id, source_system, provider_event_id)
   where provider_event_id is not null;
