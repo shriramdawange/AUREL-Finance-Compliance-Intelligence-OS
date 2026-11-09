@@ -23,17 +23,18 @@ The application is a React + TypeScript + Vite product prototype with a polished
 - Responsive AUREL application shell, navigation, dashboard, charts and module workbenches.
 - Client master creation and tenant-aware client-list loading.
 - Supabase Auth email/password sign-in/sign-up and first-organisation bootstrap.
-- Client/document/event/task data adapters that scope reads to the selected organisation.
+- Client/document/event/task/journal data adapters that scope reads to the selected organisation.
 - Private `aurel-documents` storage bucket definition and authenticated document upload flow.
-- Integer minor-unit money helpers, PayPal gross/fee/net data model, journal balancing rules.
+- Integer minor-unit money helpers, PayPal gross/fee/net data model and balanced journal validation.
 - Multi-tenant PostgreSQL schema, role-aware RLS policies, private storage policies and append-only audit triggers.
-- Journal posting integrity hardening: a journal cannot be posted unless debits equal credits.
-- PayPal sandbox order-creation Edge Function and PayPal webhook signature-verification / event-ingestion Edge Function.
+- Core accounting RPC source: default chart-of-accounts initialisation, atomic balanced journal draft creation, submit/review/approve/post lifecycle, and posted-ledger Trial Balance, P&L and Balance Sheet queries.
+- Connected journal workbench for draft creation and review/post transitions, plus live statement screens when the SQL functions are deployed.
+- PayPal sandbox order creation, capture and verified webhook Edge Function source.
 - README, Supabase provisioning guide and system architecture documentation.
 - GitHub Actions TypeScript and Vite production-build workflow.
 
 **Still prototype/demo-only:**
-- General ledger, accounting statements, GST/ITC, TDS/TCS, income-tax, compliance analytics and forecast workbenches remain illustrative UI until their services are wired.
+- General Ledger, Cash Flow, Banking imports, Sales/Purchases, Payables/Receivables, GST/ITC, TDS/TCS, Income Tax, compliance analytics and forecasts remain illustrative or unconnected workbenches until their domain services are wired. Trial Balance, P&L and Balance Sheet have report RPC source but require the SQL scripts to be applied.
 - AUREL Agent responses remain demo-limited; authenticated mode refuses to invent live financial metrics.
 - CSV bank import is currently a mapping simulation, not a durable ingestion pipeline.
 - Invoice OCR/extraction is not connected. Uploaded source documents remain unclassified until an extraction provider and review service are implemented.
@@ -103,9 +104,9 @@ The source code and SQL baseline are committed, but an AUREL-specific Supabase p
 | Integration | Current status | Remaining production work |
 |---|---|---|
 | Supabase Auth | UI and client wiring implemented | Dedicated project, provider settings, RLS tests and deployment |
-| Supabase Database | Baseline schema and RLS committed | Apply schema, advisors, migration history and integration tests |
+| Supabase Database | Baseline schema, RLS and core accounting RPC source committed | Provision project, apply all SQL scripts, expose Data API objects, advisors and integration tests |
 | Supabase Storage | Private bucket and upload adapter implemented | Provision bucket, test access denial, retention and malware scanning |
-| PayPal | Sandbox order + signed webhook function source committed | Configure REST app, server secrets, webhook subscription, deploy and end-to-end test |
+| PayPal | Sandbox create/capture + signed webhook function source committed | Configure REST app, server secrets, webhook subscription, deploy and end-to-end test |
 | Bank data | CSV mapping simulation | Statement parser, idempotent import, provider/AA connector |
 | OCR | Not connected | Provider choice, extraction schema validation, duplicate check and human review |
 | GST / ITC | Workpaper prototype | Versioned rules, GSTR-2B data provider, reviewer QC and authorised filing workflow |
