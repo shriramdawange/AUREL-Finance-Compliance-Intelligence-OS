@@ -67,6 +67,7 @@ Deno.serve(async (request) => {
     const body = await request.json();
     const organizationId = String(body.organization_id ?? "");
     const intentId = String(body.payment_intent_id ?? "");
+    const paypalOrderId = String(body.paypal_order_id ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(organizationId) || !/^[0-9a-f-]{36}$/i.test(intentId)) {
       return json({ error: "Valid organisation_id and payment_intent_id are required." }, 400, cors ?? {});
     }
@@ -84,12 +85,16 @@ Deno.serve(async (request) => {
     if (intent.lifecycle_status === "captured" && intent.provider_capture_id) {
       return json({ payment_intent_id: intent.id, capture_id: intent.provider_capture_id, status: "captured", duplicate: true }, 200, cors ?? {});
     }
-    if (!intent.provider_order_id || !["approval_pending","approved"].includes(intent.lifecycle_status)) {
+    if (!intent.provider_order_id || intent.provider_order_id !== paypalOrderId) {
+      return json({ error: "The PayPal return token does not match this stored AUREL order." }, 409, cors ?? {});
+    }
+    if (!["approval_pending","approved"].includes(intent.lifecycle_status)) {
       return json({ error: "This payment intent has not reached the PayPal approval stage." }, 409, cors ?? {});
     }
 
-    const isLive = Deno.env.get("PAYPAL_ENVIRONMENT") === "live";
-    const baseUrl = isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+    const paypalEnvironment = Deno.env.get("PAYPAL_ENVIRONMENT") ?? "sandbox";
+    if (paypalEnvironment !== "sandbox") return json({ error: "This AUREL build accepts PayPal Sandbox captures only." }, 503, cors ?? {});
+    const baseUrl = "https://api-m.sandbox.paypal.com";
     const accessToken = await paypalAccessToken(baseUrl, paypalClientId, paypalClientSecret);
     const response = await fetch(baseUrl + "/v2/checkout/orders/" + encodeURIComponent(intent.provider_order_id) + "/capture", {
       method: "POST",
@@ -127,7 +132,7 @@ Deno.serve(async (request) => {
       order_id: intent.provider_order_id,
       capture_id: capture?.id ?? null,
       status,
-      environment: isLive ? "live" : "sandbox",
+      environment: "sandbox",
       ledger_event: "awaiting_verified_webhook",
     }, status === "COMPLETED" ? 200 : 202, cors ?? {});
   } catch (error) {
