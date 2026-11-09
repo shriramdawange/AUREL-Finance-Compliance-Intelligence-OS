@@ -10,7 +10,9 @@ AUREL intentionally uses a **dedicated Supabase project**. Do not point it at ED
 - Tenant access: PostgreSQL RLS helper functions and role-scoped policies are defined in `bootstrap.sql`.
 - Document storage: a private `aurel-documents` bucket is defined. Live file upload is wired after authentication.
 - Persisted UI adapters: client master, source documents, financial event timeline, tasks, journal workflow and bank statement import are wired to Supabase.
-- Accounting RPC layer: default chart-of-accounts initialisation, balanced journal draft creation, submit/review/approve/post lifecycle, Trial Balance, P&L and Balance Sheet query functions are defined in `core-operations.sql`.
+- Accounting RPC layer: default chart-of-accounts initialisation, balanced journal draft creation, submit/review/approve/post lifecycle, General Ledger, Trial Balance, P&L and Balance Sheet query functions are defined in `core-operations.sql`.
+- Live General Ledger screen calculates posted-account running balances. Balance Sheet adds a derived current-financial-year earnings presentation line.
+- Cash Flow currently shows posted cash/bank account ledger movements only; it is not yet a classified operating/investing/financing cash-flow statement.
 - Journal UI: connected sessions can initialise a starter chart, create a two-line balanced journal draft, submit it for review, approve it and post it. Trial Balance, P&L and Balance Sheet screens query posted journal lines.
 - Bank CSV: browser-side parsing and column mapping feed a tenant- and role-scoped idempotent import RPC. Each imported bank row is stored as statement evidence and produces a canonical cash event classified as `other` pending review (credits are not assumed to be revenue).
 - PayPal Edge Functions: sandbox order creation, capture and signed webhook verification are implemented as source code.
@@ -77,6 +79,8 @@ Deploy from the repository root using the Supabase CLI:
 
 ```bash
 supabase functions deploy create-paypal-order
+supabase functions deploy capture-paypal-order
+supabase functions deploy cancel-paypal-order
 supabase functions deploy paypal-webhook --no-verify-jwt
 supabase secrets set PAYPAL_CLIENT_ID=... PAYPAL_CLIENT_SECRET=... PAYPAL_WEBHOOK_ID=... PAYPAL_ENVIRONMENT=sandbox APP_ALLOWED_ORIGINS=https://YOUR-APP-DOMAIN,http://localhost:5173
 ```
@@ -95,7 +99,7 @@ Subscribe to at least:
 - `PAYMENT.CAPTURE.REFUNDED`
 - `PAYMENT.CAPTURE.REVERSED`
 
-The create-order function currently supports USD sandbox checkout only. It requires an authenticated owner/admin/manager. It does not support live payments yet.
+The create-order, capture and cancellation functions currently support USD PayPal Sandbox checkout only. They require an authenticated owner/admin/manager. The browser redirects to PayPal approval, handles return/cancel, and requests capture using the returned order token. The capture endpoint checks that token against the saved AUREL intent. The webhook is Sandbox-only, signature-verified, retries failed deliveries, is idempotent, checks captured amount/currency against the stored intent and tracks partial refunds/reversals. It does not support live payments yet.
 
 ## 5. Document OCR boundary
 
