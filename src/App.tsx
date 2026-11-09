@@ -14,6 +14,7 @@ import {
   Tooltip, XAxis, YAxis
 } from "recharts";
 import { inr, rupees, validateJournal, mask } from "./lib/money";
+import { useAurelSession } from "./components/AuthGate";
 
 type Client = { id: string; name: string; type: string; gstin: string; state: string; turnover: number; status: string; owner: string; tasks: number };
 type Transaction = { id: string; date: string; party: string; description: string; direction: "in" | "out"; gross: number; fee: number; category: string; source: string; status: string };
@@ -98,6 +99,7 @@ const compact = (p: number) => inr(p, true);
 const dateNow = "09 Nov 2026";
 
 function App() {
+  const { client: dbClient, userId, organizationId, organizationName, isAuthenticated } = useAurelSession();
   const [section,setSection] = useState(() => location.hash.replace("#/","") || "overview");
   const [clients,setClients] = useState(initialClients);
   const [transactions,setTransactions] = useState(initialTransactions);
@@ -116,6 +118,55 @@ function App() {
   ]);
   const [chatInput,setChatInput] = useState("");
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""),2800); };
+
+  // Live tenant data replaces the illustrative client, document, event and task lists.
+  // Other modules stay clearly labelled as prototype workbenches until their APIs are wired.
+  useEffect(() => {
+    if (!dbClient || !isAuthenticated || !organizationId) return;
+    let active = true;
+    setClients([]);
+    setDocuments([]);
+    setTransactions([]);
+    setRecon([]);
+    setTasks([]);
+    (async () => {
+      const [clientResult, documentResult, eventResult, taskResult] = await Promise.all([
+        dbClient.from("clients").select("id,legal_name,entity_type,gstin,state,annual_turnover_minor,status,relationship_manager").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+        dbClient.from("source_documents").select("id,original_filename,counterparty_name,document_type,document_date,total_minor,extraction_confidence,status,created_at").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+        dbClient.from("financial_events").select("id,occurred_at,counterparty_name,description,cash_direction,gross_minor,fee_minor,event_category,source_system,lifecycle_status").eq("organization_id", organizationId).order("occurred_at", { ascending: false }).limit(100),
+        dbClient.from("tasks").select("id,title,due_at,assigned_to,priority,lifecycle_status,client_id").eq("organization_id", organizationId).order("due_at", { ascending: true }).limit(100),
+      ]);
+      if (!active) return;
+      const errors = [clientResult.error, documentResult.error, eventResult.error, taskResult.error].filter(Boolean);
+      if (errors.length) notify("Some live records could not be loaded. Check the database schema and RLS policies.");
+      setClients((clientResult.data ?? []).map((row: any) => ({
+        id: row.id, name: row.legal_name, type: String(row.entity_type).replace(/_/g, " ").replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+        gstin: row.gstin || "—", state: row.state || "—", turnover: Number(row.annual_turnover_minor || 0),
+        status: row.status === "on_hold" ? "On hold" : String(row.status).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+        owner: row.relationship_manager || "Unassigned", tasks: 0,
+      })));
+      setDocuments((documentResult.data ?? []).map((row: any) => ({
+        id: row.id, name: row.original_filename, party: row.counterparty_name || "Pending identification",
+        kind: String(row.document_type || "unclassified").replace(/_/g, " "), date: row.document_date || String(row.created_at).slice(0, 10),
+        amount: Number(row.total_minor || 0), confidence: Number(row.extraction_confidence || 0),
+        status: row.status === "needs_review" ? "Needs review" : row.status === "uploaded" ? "Uploaded" : String(row.status).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+      })));
+      setTransactions((eventResult.data ?? []).map((row: any) => ({
+        id: row.id, date: String(row.occurred_at).slice(0, 10), party: row.counterparty_name || "Unspecified counterparty",
+        description: row.description || row.event_category, direction: row.cash_direction === "inflow" ? "in" : "out",
+        gross: Number(row.gross_minor || 0), fee: Number(row.fee_minor || 0), category: row.event_category,
+        source: row.source_system, status: String(row.lifecycle_status).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+      })));
+      setTasks((taskResult.data ?? []).map((row: any) => ({
+        id: row.id, title: row.title, client: row.client_id || "Organisation task",
+        due: row.due_at || "—", assignee: row.assigned_to || "Unassigned", priority: String(row.priority).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+        status: row.lifecycle_status === "todo" ? "To do" : row.lifecycle_status === "awaiting_review" ? "Awaiting review" : String(row.lifecycle_status).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+      })));
+    })();
+    return () => { active = false; };
+  }, [dbClient, isAuthenticated, organizationId]);
+
+
   const go = (path:string) => { location.hash = "/" + path; setSection(path); setMobileOpen(false); setSelected(null); };
   useEffect(() => { const listener = () => setSection(location.hash.replace("#/","") || "overview"); window.addEventListener("hashchange",listener); return () => window.removeEventListener("hashchange",listener); },[]);
   const globalResults = useMemo(() => {
@@ -123,14 +174,71 @@ function App() {
     if (!q) return [];
     return [...clients.map(x=>({label:x.name,meta:"Client",path:"clients"})),...transactions.map(x=>({label:x.party+" · "+x.description,meta:"Transaction",path:"transactions"})),...documents.map(x=>({label:x.name,meta:"Document",path:"documents"}))].filter(x=>(x.label+" "+x.meta).toLowerCase().includes(q)).slice(0,7);
   },[search,clients,transactions,documents]);
-  const addClient = (event:FormEvent<HTMLFormElement>) => {
+  const addClient = async (event:FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const f = new FormData(event.currentTarget);
-    const next:Client = {id:"CL-"+String(clients.length+1).padStart(3,"0"),name:String(f.get("name")),type:String(f.get("type")),gstin:String(f.get("gstin")||"—"),state:String(f.get("state")||"Maharashtra"),turnover:0,status:"Onboarding",owner:"You",tasks:0};
+    const legalName = String(f.get("name")).trim();
+    const typeLabel = String(f.get("type"));
+    const entityType = typeLabel === "Private Limited" ? "company" : typeLabel.toLowerCase();
+    if (isAuthenticated && dbClient && organizationId) {
+      const { data, error } = await dbClient.from("clients").insert({
+        organization_id: organizationId,
+        legal_name: legalName,
+        display_name: legalName,
+        entity_type: entityType,
+        gstin: String(f.get("gstin") || "").trim() || null,
+        state: String(f.get("state") || "Maharashtra"),
+        country_code: "IN",
+        annual_turnover_minor: 0,
+        status: "onboarding",
+        created_by: userId,
+      }).select("id,legal_name,entity_type,gstin,state,annual_turnover_minor,status,relationship_manager").single();
+      if (error) { notify("Client could not be saved: " + error.message); return; }
+      const next:Client = { id:data.id,name:data.legal_name,type:typeLabel,gstin:data.gstin||"—",state:data.state||"—",turnover:Number(data.annual_turnover_minor||0),status:"Onboarding",owner:"You",tasks:0 };
+      setClients((previous)=>[next,...previous]); setModal(""); notify("Client saved to the organisation workspace.");
+      return;
+    }
+    const next:Client = {id:"CL-"+String(clients.length+1).padStart(3,"0"),name:legalName,type:typeLabel,gstin:String(f.get("gstin")||"—"),state:String(f.get("state")||"Maharashtra"),turnover:0,status:"Onboarding",owner:"You",tasks:0};
     setClients([next,...clients]); setModal(""); notify("Client workspace created in demo session.");
   };
-  const uploadDocs = (files:FileList | null) => {
+  const uploadDocs = async (files:FileList | null) => {
     if(!files?.length) return;
+    if (isAuthenticated && dbClient && organizationId) {
+      const created: DocumentItem[] = [];
+      for (const file of Array.from(files)) {
+        if (file.size > 25 * 1024 * 1024) { notify(file.name + " exceeds the 25 MB upload limit."); continue; }
+        const documentId = crypto.randomUUID();
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "document";
+        const storagePath = organizationId + "/" + documentId + "/" + safeName;
+        const { error: uploadError } = await dbClient.storage.from("aurel-documents").upload(storagePath, file, {
+          upsert: false, contentType: file.type || "application/octet-stream",
+        });
+        if (uploadError) { notify("Upload failed for " + file.name + ": " + uploadError.message); continue; }
+        const { data, error } = await dbClient.from("source_documents").insert({
+          id: documentId,
+          organization_id: organizationId,
+          original_filename: file.name,
+          storage_bucket: "aurel-documents",
+          storage_path: storagePath,
+          mime_type: file.type || "application/octet-stream",
+          size_bytes: file.size,
+          document_type: "unclassified",
+          status: "uploaded",
+          uploaded_by: userId,
+        }).select("id,original_filename,counterparty_name,document_type,document_date,total_minor,extraction_confidence,status,created_at").single();
+        if (error) { notify("File is stored but its document record failed: " + error.message); continue; }
+        created.push({
+          id: data.id, name: data.original_filename, party: data.counterparty_name || "Pending identification",
+          kind: data.document_type, date: data.document_date || String(data.created_at).slice(0,10),
+          amount: Number(data.total_minor || 0), confidence: Number(data.extraction_confidence || 0), status: "Uploaded",
+        });
+      }
+      if (created.length) {
+        setDocuments((previous)=>[...created,...previous]);
+        notify(created.length + " document(s) stored in the private organisation bucket. OCR is not connected yet.");
+      }
+      return;
+    }
     const next = Array.from(files).map((file,i)=>({id:"DOC-"+(185+i),name:file.name,party:"Pending identification",kind:file.type.includes("image")?"Image upload":"Document upload",date:dateNow,amount:0,confidence:0,status:"Uploaded"} as DocumentItem));
     setDocuments([...next,...documents]); notify(next.length+" file(s) added to the demo inbox. No cloud upload occurred.");
   };
@@ -155,7 +263,7 @@ function App() {
 
   const sidebar = <aside className={"sidebar "+(mobileOpen?"mobile-open":"")}>
     <div className="brand-row"><div className="brand-symbol">A</div><div><div className="brand-name">AUREL</div><div className="brand-sub">FINANCE INTELLIGENCE</div></div><button className="icon-btn mobile-close" onClick={()=>setMobileOpen(false)}><X size={17}/></button></div>
-    <button className="org-switch"><div className="org-avatar">K</div><div className="org-text"><b>Kaveri Textiles Pvt. Ltd.</b><span>Demo workspace · FY 2026–27</span></div><ChevronDown size={15}/></button>
+    <button className="org-switch"><div className="org-avatar">{organizationName ? organizationName.charAt(0).toUpperCase() : "K"}</div><div className="org-text"><b>{organizationName || "Kaveri Textiles Pvt. Ltd."}</b><span>{isAuthenticated ? "Connected organisation · FY 2026–27" : "Demo workspace · FY 2026–27"}</span></div><ChevronDown size={15}/></button>
     <div className="nav-scroll">
       <button className={"nav-link solo "+(section==="overview"?"active":"")} onClick={()=>go("overview")}><LayoutDashboard size={17}/><span>Command Centre</span><span className="nav-dot"/></button>
       {navGroups.map(group=><div className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(([title,path,Icon])=><button key={path} className={"nav-link "+(section===path?"active":"")} onClick={()=>go(path)}><Icon size={16}/><span>{title}</span>{path==="documents"&&<em>8</em>}{path==="itc"&&<em className="alert-count">7</em>}</button>)}</div>)}
@@ -169,8 +277,8 @@ function App() {
       <header className="topbar"><div className="top-left"><button className="icon-btn mobile-menu" onClick={()=>setMobileOpen(true)}><Menu size={19}/></button><span className="crumb-muted">Workspace</span><ChevronRight size={13}/><span className="crumb-current">{section==="overview"?"Command Centre":navTitle(section)}</span></div>
         <div className="top-actions"><div className="global-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search records, clients..." /><kbd>⌘ K</kbd>{search&&<div className="search-results">{globalResults.length?globalResults.map((r,i)=><button key={i} onClick={()=>{go(r.path);setSearch("");}}><Search size={14}/><span>{r.label}</span><small>{r.meta}</small></button>):<div className="search-empty">No matching records</div>}</div>}</div><div className="period-select"><CalendarDays size={14}/><select value={period} onChange={e=>setPeriod(e.target.value)}><option>Oct 2026</option><option>Sep 2026</option><option>Q2 FY 2026–27</option><option>FY 2026–27</option></select><ChevronDown size={13}/></div><button className="icon-btn notification-btn" onClick={()=>notify("You are all caught up in this demo workspace.")}><Bell size={17}/><i/></button><div className="top-avatar">AS</div></div>
       </header>
-      <div className="demo-banner"><span className="demo-pip"/> DEMO WORKSPACE <span className="banner-divider"/> All records and integrations shown are fictional sample data <button onClick={()=>notify("Demo data is stored only in this browser session.")}>About demo data <ArrowRight size={12}/></button></div>
-      <div className="page-content">{section==="overview"?<Dashboard period={period} transactions={transactions} tasks={tasks} go={go} openAssistant={()=>setAssistantOpen(true)} />:<ModulePage section={section} clients={clients} documents={documents} transactions={transactions} recon={recon} tasks={tasks} selected={selected} setSelected={setSelected} setModal={setModal} notify={notify} go={go} exportCsv={exportCsv} setRecon={setRecon} setTasks={setTasks} uploadDocs={uploadDocs} />}</div>
+      <div className="demo-banner"><span className="demo-pip"/> {isAuthenticated ? "CONNECTED WORKSPACE" : "DEMO WORKSPACE"} <span className="banner-divider"/> {isAuthenticated ? "Clients and documents use the database; accounting, tax and analytics workbenches remain sample-only." : "All records and integrations shown are fictional sample data"} <button onClick={()=>notify(isAuthenticated ? "Live persistence currently covers client records and document storage. Other modules are still prototype-only." : "Demo data is stored only in this browser session.")}>Data boundaries <ArrowRight size={12}/></button></div>
+      <div className="page-content">{section==="overview"?<Dashboard period={period} transactions={transactions} tasks={tasks} go={go} openAssistant={()=>setAssistantOpen(true)} demoMode={!isAuthenticated} />:<ModulePage section={section} clients={clients} documents={documents} transactions={transactions} recon={recon} tasks={tasks} selected={selected} setSelected={setSelected} setModal={setModal} notify={notify} go={go} exportCsv={exportCsv} setRecon={setRecon} setTasks={setTasks} uploadDocs={uploadDocs} />}</div>
     </main>
     {assistantOpen&&<div className="assistant-backdrop" onClick={()=>setAssistantOpen(false)}/>}
     <button className="assistant-fab" onClick={()=>setAssistantOpen(!assistantOpen)}><Sparkles size={17}/><span>AUREL Agent</span></button>
@@ -185,19 +293,19 @@ function App() {
 
 export default App;
 
-function Dashboard({period,transactions,tasks,go,openAssistant}:any) {
+function Dashboard({period,transactions,tasks,go,openAssistant,demoMode=true}:any) {
   return <div className="dashboard animate-in">
-    <div className="page-heading"><div><div className="eyebrow">MONDAY, 09 NOVEMBER 2026 <span className="heading-dot"/> FINANCIAL OVERVIEW</div><h1>Good morning, Ananya<span className="heading-period">.</span></h1><p>Your business has a healthy cash position. Here is what needs your attention.</p></div><div className="heading-actions"><button className="btn btn-quiet" onClick={()=>openAssistant()}><Sparkles size={15}/> Ask AUREL</button><button className="btn btn-primary" onClick={()=>go("documents")}><Upload size={15}/> Add documents</button></div></div>
-    <div className="context-line"><span className="context-pill"><CalendarDays size={13}/>{period}</span><span className="coverage-text"><ShieldCheck size={13}/> Source coverage: 92% of connected demo records</span><span className="coverage-right">Last refreshed 09:42 AM</span></div>
+    <div className="page-heading"><div><div className="eyebrow">MONDAY, 09 NOVEMBER 2026 <span className="heading-dot"/> FINANCIAL OVERVIEW</div><h1>Good morning, Ananya<span className="heading-period">.</span></h1><p>{demoMode ? "Your business has a healthy cash position. Here is what needs your attention." : "Your organisation is connected. Add source records before AUREL calculates financial performance."}</p></div><div className="heading-actions"><button className="btn btn-quiet" onClick={()=>openAssistant()}><Sparkles size={15}/> Ask AUREL</button><button className="btn btn-primary" onClick={()=>go("documents")}><Upload size={15}/> Add documents</button></div></div>
+    <div className="context-line"><span className="context-pill"><CalendarDays size={13}/>{period}</span><span className="coverage-text"><ShieldCheck size={13}/> {demoMode ? "Source coverage: 92% of connected demo records" : "Live workspace · financial source coverage not yet calculated"}</span><span className="coverage-right">Last refreshed 09:42 AM</span></div>
     <div className="kpi-grid">
-      <Kpi label="Operating inflow" value="₹42.80L" change="+18.4%" positive helper="Customer receipts and operating credits" icon={<ArrowDownLeft size={17}/>} color="green"/>
-      <Kpi label="Operating outflow" value="₹18.60L" change="−6.2%" positive helper="Vendor, people and operating spend" icon={<ArrowUpRight size={17}/>} color="ink"/>
-      <Kpi label="Provisional operating surplus" value="₹24.20L" change="+32.8%" positive helper="Cash basis · not accounting profit" icon={<Activity size={17}/>} color="gold"/>
-      <Kpi label="Available cash" value="₹31.40L" change="+8.1%" positive helper="Latest known connected balances" icon={<Wallet size={17}/>} color="blue"/>
+      <Kpi label="Operating inflow" value={demoMode ? "₹42.80L" : "—"} change={demoMode ? "+18.4%" : "No ledger data"} positive helper={demoMode ? "Customer receipts and operating credits" : "Awaiting persisted financial events"} icon={<ArrowDownLeft size={17}/>} color="green"/>
+      <Kpi label="Operating outflow" value={demoMode ? "₹18.60L" : "—"} change={demoMode ? "−6.2%" : "No ledger data"} positive helper={demoMode ? "Vendor, people and operating spend" : "Awaiting persisted financial events"} icon={<ArrowUpRight size={17}/>} color="ink"/>
+      <Kpi label="Provisional operating surplus" value={demoMode ? "₹24.20L" : "—"} change={demoMode ? "+32.8%" : "Not calculated"} positive helper="Cash basis · not accounting profit" icon={<Activity size={17}/>} color="gold"/>
+      <Kpi label="Available cash" value={demoMode ? "₹31.40L" : "—"} change={demoMode ? "+8.1%" : "No bank source"} positive helper={demoMode ? "Latest known connected balances" : "Connect an authorised source to calculate"} icon={<Wallet size={17}/>} color="blue"/>
     </div>
     <div className="content-grid primary-grid">
-      <section className="panel cash-panel"><div className="panel-head"><div><div className="eyebrow">CASH MOVEMENT</div><h3>Inflow vs outflow</h3><p>Operating cash movement over the last six months</p></div><button className="select-ghost">Monthly <ChevronDown size={13}/></button></div><div className="chart-legend"><span><i className="legend-dot inflow-dot"/> Inflow</span><span><i className="legend-dot outflow-dot"/> Outflow</span><small>₹ lakh</small></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={cashSeries} margin={{top:8,right:8,left:-16,bottom:0}}><defs><linearGradient id="inflowFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#20785f" stopOpacity={.18}/><stop offset="100%" stopColor="#20785f" stopOpacity={0}/></linearGradient><linearGradient id="outflowFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#9aa7a0" stopOpacity={.15}/><stop offset="100%" stopColor="#9aa7a0" stopOpacity={0}/></linearGradient></defs><CartesianGrid vertical={false} stroke="#e9ede8" strokeDasharray="3 4"/><XAxis dataKey="period" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#89938d"}} dy={10}/><YAxis axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#89938d"}} tickFormatter={v=>"₹"+v+"L"}/><Tooltip contentStyle={{border:"1px solid #e5e9e3",borderRadius:10,fontSize:12}} formatter={(value:any)=>"₹"+value+"L"}/><Area type="monotone" dataKey="inflow" stroke="#24785f" fill="url(#inflowFill)" strokeWidth={2.5}/><Area type="monotone" dataKey="outflow" stroke="#9aa7a0" fill="url(#outflowFill)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div><div className="chart-footer"><span>May–Oct 2026 · Sample ledger</span><button className="text-link" onClick={()=>go("cash-flow")}>View cash flow <ArrowRight size={13}/></button></div></section>
-      <section className="panel spend-panel"><div className="panel-head"><div><div className="eyebrow">COST STRUCTURE</div><h3>Where money goes</h3><p>Operating outflow · October</p></div><button className="more-btn">···</button></div><div className="spend-total"><strong>₹18.60L</strong><span><i className="status-dot good"/> within monthly plan</span></div><div className="spend-chart"><div className="donut-wrap"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={spendSeries} dataKey="value" nameKey="name" innerRadius={49} outerRadius={67} paddingAngle={3} stroke="none">{spendSeries.map((x,i)=><Cell key={i} fill={x.color}/>)}</Pie><Tooltip formatter={(v:any)=>"₹"+v+"L"}/></PieChart></ResponsiveContainer><div className="donut-center"><b>100%</b><span>allocated</span></div></div><div className="spend-legend">{spendSeries.map(item=><div key={item.name}><i style={{background:item.color}}/><span>{item.name}</span><b>₹{item.value.toFixed(2)}L</b></div>)}</div></div><button className="text-link panel-link" onClick={()=>go("insights")}>Explore spend analytics <ArrowRight size={13}/></button></section>
+      <section className="panel cash-panel"><div className="panel-head"><div><div className="eyebrow">CASH MOVEMENT</div><h3>Inflow vs outflow</h3><p>Operating cash movement over the last six months</p></div><button className="select-ghost">Monthly <ChevronDown size={13}/></button></div><div className="chart-legend"><span><i className="legend-dot inflow-dot"/> Inflow</span><span><i className="legend-dot outflow-dot"/> Outflow</span><small>₹ lakh</small></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={demoMode ? cashSeries : []} margin={{top:8,right:8,left:-16,bottom:0}}><defs><linearGradient id="inflowFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#20785f" stopOpacity={.18}/><stop offset="100%" stopColor="#20785f" stopOpacity={0}/></linearGradient><linearGradient id="outflowFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#9aa7a0" stopOpacity={.15}/><stop offset="100%" stopColor="#9aa7a0" stopOpacity={0}/></linearGradient></defs><CartesianGrid vertical={false} stroke="#e9ede8" strokeDasharray="3 4"/><XAxis dataKey="period" axisLine={false} tickLine={false} tick={{fontSize:11,fill:"#89938d"}} dy={10}/><YAxis axisLine={false} tickLine={false} tick={{fontSize:10,fill:"#89938d"}} tickFormatter={v=>"₹"+v+"L"}/><Tooltip contentStyle={{border:"1px solid #e5e9e3",borderRadius:10,fontSize:12}} formatter={(value:any)=>"₹"+value+"L"}/><Area type="monotone" dataKey="inflow" stroke="#24785f" fill="url(#inflowFill)" strokeWidth={2.5}/><Area type="monotone" dataKey="outflow" stroke="#9aa7a0" fill="url(#outflowFill)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div><div className="chart-footer"><span>{demoMode ? "May–Oct 2026 · Sample ledger" : "No persisted cash ledger available yet"}</span><button className="text-link" onClick={()=>go("cash-flow")}>View cash flow <ArrowRight size={13}/></button></div></section>
+      <section className="panel spend-panel"><div className="panel-head"><div><div className="eyebrow">COST STRUCTURE</div><h3>Where money goes</h3><p>Operating outflow · October</p></div><button className="more-btn">···</button></div><div className="spend-total"><strong>{demoMode ? "₹18.60L" : "—"}</strong><span><i className="status-dot good"/> {demoMode ? "within monthly plan" : "No spend classification yet"}</span></div><div className="spend-chart"><div className="donut-wrap"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={demoMode ? spendSeries : []} dataKey="value" nameKey="name" innerRadius={49} outerRadius={67} paddingAngle={3} stroke="none">{spendSeries.map((x,i)=><Cell key={i} fill={x.color}/>)}</Pie><Tooltip formatter={(v:any)=>"₹"+v+"L"}/></PieChart></ResponsiveContainer><div className="donut-center"><b>{demoMode ? "100%" : "—"}</b><span>{demoMode ? "allocated" : "no data"}</span></div></div><div className="spend-legend">{(demoMode ? spendSeries : []).map(item=><div key={item.name}><i style={{background:item.color}}/><span>{item.name}</span><b>₹{item.value.toFixed(2)}L</b></div>)}</div></div><button className="text-link panel-link" onClick={()=>go("insights")}>Explore spend analytics <ArrowRight size={13}/></button></section>
     </div>
     <div className="content-grid secondary-grid">
       <section className="panel queue-panel"><div className="panel-head"><div><div className="eyebrow">NEEDS ATTENTION</div><h3>Review queue <span className="count-bubble">8</span></h3><p>Exceptions that need a human decision</p></div><button className="text-link" onClick={()=>go("tasks")}>View all <ArrowRight size={13}/></button></div><div className="queue-list"><div className="queue-item"><div className="queue-icon warning"><FileSpreadsheet size={16}/></div><div className="queue-main"><b>7 ITC exceptions need review</b><span>Kaveri Textiles · October 2026</span></div><span className="priority-tag high">HIGH</span><button onClick={()=>go("itc")}><ArrowRight size={15}/></button></div><div className="queue-item"><div className="queue-icon red"><FileText size={16}/></div><div className="queue-main"><b>Credit note extraction confidence 79%</b><span>Lotus Retail House · CN-088</span></div><span className="priority-tag medium">MEDIUM</span><button onClick={()=>go("documents")}><ArrowRight size={15}/></button></div><div className="queue-item"><div className="queue-icon blue"><GitCompareArrows size={16}/></div><div className="queue-main"><b>4 bank statement lines unmatched</b><span>HDFC Bank · October 2026</span></div><span className="priority-tag medium">MEDIUM</span><button onClick={()=>go("reconciliation")}><ArrowRight size={15}/></button></div><div className="queue-item"><div className="queue-icon neutral"><LockKeyhole size={16}/></div><div className="queue-main"><b>Partnership deed is still pending</b><span>Coastal Agro Foods LLP · Onboarding</span></div><span className="priority-tag low">LOW</span><button onClick={()=>go("clients")}><ArrowRight size={15}/></button></div></div></section>
