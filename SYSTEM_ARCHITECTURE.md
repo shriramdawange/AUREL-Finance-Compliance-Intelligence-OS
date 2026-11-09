@@ -13,8 +13,10 @@ AUREL is a multi-tenant finance and compliance operating system. Each organisati
 - Tenant-aware client/document/event/task queries.
 - Private document upload adapter to the `aurel-documents` bucket.
 - SQL baseline with organisation membership, role-aware RLS, core financial/event/document/accounting/tax tables, audit triggers and storage policies.
-- PayPal Edge Functions for authenticated sandbox order creation, capture and signed webhook intake.
-- Core accounting RPCs for chart initialisation, balanced journal draft creation, review, approval, posting, Trial Balance, P&L and Balance Sheet.
+- PayPal Edge Functions for authenticated sandbox order creation, capture, cancellation and signed webhook intake.
+- PayPal checkout return/cancel handling in the frontend, with an organisation-scoped payment-request register.
+- Core accounting RPCs for chart initialisation, balanced journal draft creation, review, approval, posting, General Ledger, Trial Balance, P&L and Balance Sheet.
+- Idempotent bank statement CSV ingestion that stores evidence separately and creates unclassified cash movement events.
 
 **Not yet deployed**
 - No AUREL-specific Supabase project has been provisioned.
