@@ -352,7 +352,7 @@ function JournalModal({onClose,notify,dbClient,organizationId,clients=[],isAuthe
   const [debitAccount,setDebitAccount]=useState("");const [creditAccount,setCreditAccount]=useState("");
   const [loadingAccounts,setLoadingAccounts]=useState(false);const [saving,setSaving]=useState(false);const [accountMessage,setAccountMessage]=useState("");
   const verdict=validateJournal([{debit:rupees(Number(debit)||0),credit:0},{debit:0,credit:rupees(Number(credit)||0)}]);
-  useEffect(()=>{if(!clientId&&clients[0]?.id)setClientId(clients[0].id);},[clients,clientId]);
+  useEffect(()=>{if(clients.length&&!clients.some((client:any)=>client.id===clientId))setClientId(clients[0].id);},[clients,clientId]);
   useEffect(()=>{
     if(!isAuthenticated||!dbClient||!organizationId||!clientId){setAccounts([]);return;}
     let active=true;setLoadingAccounts(true);
