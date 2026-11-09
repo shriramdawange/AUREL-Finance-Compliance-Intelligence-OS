@@ -13,6 +13,7 @@ type AurelSessionContextValue = {
   userId: string | null;
   organizationId: string | null;
   organizationName: string | null;
+  organizationRole: string | null;
   isAuthenticated: boolean;
 };
 
@@ -23,6 +24,7 @@ const demoContext: AurelSessionContextValue = {
   userId: null,
   organizationId: null,
   organizationName: null,
+  organizationRole: null,
   isAuthenticated: false,
 };
 
@@ -120,6 +122,7 @@ function ConfiguredAuthGate({ children }: { children: ReactNode }) {
     userId: session?.user?.id ?? null,
     organizationId: activeMembership?.organization_id ?? null,
     organizationName: activeMembership?.organization.name ?? null,
+    organizationRole: activeMembership?.role ?? null,
     isAuthenticated: Boolean(session?.user && activeMembership),
   }), [client, session?.user, activeMembership]);
 
