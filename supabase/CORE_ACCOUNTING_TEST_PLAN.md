@@ -47,6 +47,20 @@ Create two test organisations with independent users. In organisation A, create 
 - An account from another organisation or a different client is rejected.
 - A user without the permitted organisation role cannot import.
 
+## Sales and purchase trade documents
+
+- A valid sales invoice creates one draft obligation and one line, with customer counterparty details.
+- A valid purchase bill creates one draft obligation and one line, with supplier counterparty details.
+- Taxable value is calculated server-side from quantity and integer-paise unit rate; tax is split CGST/SGST for intra-state mode or IGST for inter-state mode.
+- Zero tax rate remains valid; out-of-range quantity, rate, GST percentage, date, missing counterparty, or invalid tax mode is rejected.
+- Duplicate document kind/number within the same client and organisation is rejected by the unique constraint.
+- Counterparty records are re-used by organisation, party type and normalized display name.
+- The create RPC never inserts a financial event, a receipt, or a journal entry.
+- The creator cannot approve their own draft. A different authorised reviewer/owner/admin/manager can approve it.
+- Only owner/admin/manager can issue an approved document; the approved values cannot be changed while issuing.
+- Document line changes are rejected after the parent document leaves draft.
+- Cross-organisation or cross-client IDs must fail.
+
 ## General ledger and financial statements
 
 - The general ledger returns only posted journal lines for the selected client and date range.
@@ -76,4 +90,6 @@ Create two test organisations with independent users. In organisation A, create 
 - Source-to-journal automation, reversals and tax-specific posting maps.
 - Cash-flow classification, opening balance imports and subledger-to-bank reconciliation.
 - Current-year earnings is a derived report line, not a posted closing journal; formal year-end close and retained-earnings transfer logic remain outstanding.
+- Trade document approval is an obligation workflow only. Payment matching, partial settlement allocation, overdue ageing and automatic journal posting are separate pending workflows.
+- Trade document calculations are arithmetic previews, not a final determination of statutory GST treatment; verify place-of-supply, exemption, HSN/SAC and special-case treatment with current rules.
 - Automated pgTAP/CI database tests and independent security review.
