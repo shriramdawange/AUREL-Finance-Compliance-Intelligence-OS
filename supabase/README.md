@@ -9,8 +9,10 @@ AUREL intentionally uses a **dedicated Supabase project**. Do not point it at ED
 - Organisation bootstrap: a signed-in user can create the first organisation and become its owner.
 - Tenant access: PostgreSQL RLS helper functions and role-scoped policies are defined in `bootstrap.sql`.
 - Document storage: a private `aurel-documents` bucket is defined. Live file upload is wired after authentication.
-- Persisted UI adapters: client master, source documents, financial event timeline and task list are wired to Supabase.
-- PayPal Edge Functions: sandbox order creation and signed webhook verification are implemented as source code.
+- Persisted UI adapters: client master, source documents, financial event timeline, tasks and journal list are wired to Supabase.
+- Accounting RPC layer: default chart-of-accounts initialisation, balanced journal draft creation, submit/review/approve/post lifecycle, Trial Balance, P&L and Balance Sheet query functions are defined in `core-operations.sql`.
+- Journal UI: connected sessions can initialise a starter chart, create a two-line balanced journal draft, submit it for review, approve it and post it. Trial Balance, P&L and Balance Sheet screens query posted journal lines.
+- PayPal Edge Functions: sandbox order creation, capture and signed webhook verification are implemented as source code.
 - Not yet live: no AUREL-specific Supabase project has been provisioned, no schema has been applied to a remote AUREL database, and no provider secrets have been configured. Live Supabase mode will not work until these steps are completed.
 
 ## 1. Create a dedicated project
@@ -25,10 +27,16 @@ In the new project's SQL Editor, run these files in order:
 
 1. `supabase/bootstrap.sql`
 2. `supabase/integrity-hardening.sql`
+3. `supabase/core-operations.sql`
+4. `supabase/verify-core-operations.sql`
 
-The files are a baseline for a new dedicated database. The bootstrap transaction creates tenant tables, indexes, RLS policies, private storage bucket and audit triggers. The hardening script adds double-entry journal posting validation and restricts service-only PayPal webhook payloads.
+The bootstrap transaction creates tenant tables, indexes, RLS policies, private storage bucket and audit triggers. The hardening script adds double-entry journal posting validation and restricts service-only PayPal webhook payloads. The core-operations script adds invoker-rights RPCs for chart-of-accounts initialisation, atomic balanced journal creation, review/approval/posting and posted-ledger Trial Balance, P&L and Balance Sheet queries. The verification script is a non-destructive installation smoke check; it does not replace behavioural tests.
 
-Run the bootstrap exactly once on the new empty project. After schema application, run Supabase Security and Performance Advisors and resolve all findings before using real client data.
+Run the bootstrap exactly once on the new empty project. Apply the next two scripts after it. Confirm the smoke check succeeds. Then run Supabase Security, Performance and Health Advisors and resolve all findings before using real client data.
+
+### Data API exposure
+
+AUREL's browser uses `supabase-js`, which calls the Supabase Data API. Current Supabase projects no longer automatically expose new public tables/functions just because they are created. AUREL scripts include explicit least-privilege grants, but also confirm that the Data API is enabled, `public` is in the exposed schemas, and the required tables/functions show as exposed in the project settings. Keep RLS enabled; a grant only makes an object reachable, while RLS controls which tenant rows the user can access.
 
 The project is not yet linked to local Supabase CLI migration history. Once the dedicated project exists, create and validate a formal versioned migration from this baseline, then keep subsequent schema changes as migrations.
 
@@ -107,10 +115,10 @@ The private document storage path and extraction proposal tables are ready. OCR/
 ## 7. Verification still required
 
 Before handling real records:
-1. Apply schema to the dedicated AUREL project.
+1. Apply all four SQL scripts to the dedicated AUREL project and confirm the Data API can reach only the explicitly granted objects.
 2. Run Supabase Security, Performance and Health Advisors.
 3. Test organisation creation, multi-tenant isolation, membership boundaries and RLS negative cases with two independent users.
 4. Test private document upload/download and cross-tenant denial.
-5. Test journal posting constraints, event idempotency and append-only audit.
-6. Test PayPal sandbox order approval, completed, denied, refund, reversal, duplicate delivery, unmatched intent and invalid signature cases.
-7. Add OCR provider, deterministic GST/tax rules, accounting adapters, agent tools, monitoring and retention policies.
+5. Run the behavioural cases in `CORE_ACCOUNTING_TEST_PLAN.md`; specifically test idempotent chart initialisation, atomic draft creation, role transitions, balanced posting and report totals.
+6. Test PayPal sandbox order approval, capture, denied, refund, reversal, duplicate delivery, unmatched intent, retry after processing failure and invalid signature cases.
+7. Add OCR provider, deterministic GST/tax rules, bank imports, period locks, complete reversal workflows, cash-flow classification, accounting adapters, agent tools, monitoring and retention policies.
