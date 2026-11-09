@@ -154,7 +154,8 @@ The initial checkout function is USD sandbox only. No live payment or payout cap
 
 - Source financial events are append-only.
 - Audit events are append-only and server-triggered for key mutations.
-- Journal lines can only be changed while their parent journal is a draft.
+- Journal lines can only be added or changed while their parent journal is a draft, and each line must use an active account from the same client.
+- A database lifecycle trigger enforces draft → pending review → approved → posted; client calls cannot skip the approval chain.
 - A journal cannot enter `posted` unless at least two lines exist, debit total is positive, and debit equals credit.
 - Posted journals cannot be edited/deleted; corrections require reversal/adjustment workflows.
 - The database uses integer minor units to avoid floating-point currency arithmetic.
