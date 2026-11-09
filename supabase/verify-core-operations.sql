@@ -38,6 +38,26 @@ begin
     raise exception 'RLS is not enabled on public.journal_lines.';
   end if;
 
+  if not exists (
+    select 1 from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'journal_entries'
+      and t.tgname = 'journal_entries_lifecycle_guard' and not t.tgisinternal
+  ) then
+    raise exception 'Journal lifecycle guard trigger is not installed.';
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'journal_lines'
+      and t.tgname = 'journal_lines_draft_only' and not t.tgisinternal
+  ) then
+    raise exception 'Journal line mutation guard trigger is not installed.';
+  end if;
+
   if exists (
     select 1
     from pg_proc p
