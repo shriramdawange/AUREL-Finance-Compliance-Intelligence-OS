@@ -233,9 +233,10 @@ function App() {
         gross: Number(row.gross_minor || 0), fee: Number(row.fee_minor || 0), category: row.event_category,
         source: row.source_system, status: String(row.lifecycle_status).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
       })));
+      const clientNameById = new Map((clientResult.data ?? []).map((row:any) => [row.id, row.legal_name]));
       setTasks((taskResult.data ?? []).map((row: any) => ({
-        id: row.id, title: row.title, client: row.client_id || "Organisation task",
-        due: row.due_at || "—", assignee: row.assigned_to || "Unassigned", priority: String(row.priority).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
+        id: row.id, title: row.title, client: row.client_id ? clientNameById.get(row.client_id) || "Client record" : "Organisation task",
+        due: row.due_at || "—", assignee: row.assigned_to ? (row.assigned_to===userId ? "You" : "Assigned member") : "Unassigned", priority: String(row.priority).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
         status: row.lifecycle_status === "todo" ? "To do" : row.lifecycle_status === "awaiting_review" ? "Awaiting review" : String(row.lifecycle_status).replace(/\b\w/g, (ch: string) => ch.toUpperCase()),
       })));
       setJournalEntries((journalResult.data ?? []).map((row:any) => ({
