@@ -37,6 +37,16 @@ Create two test organisations with independent users. In organisation A, create 
 - Posted journals and posted journal lines cannot be edited or deleted.
 - A correction must use a reversal/adjustment workflow; do not overwrite a posted source record.
 
+## Bank statement CSV import
+
+- A valid import with one debit and one credit stores both statement lines and emits two canonical financial events.
+- The imported rows remain classified as `other`; a credit is not automatically treated as sales revenue.
+- A repeated upload using the same statement import ID and stable row IDs creates no duplicate statement lines or financial events.
+- Each row has exactly one positive debit or credit amount, an ISO date and non-empty narration.
+- Negative amounts, both-sided amounts, zero amounts, malformed dates, duplicate row IDs and invalid account IDs are rejected atomically.
+- An account from another organisation or a different client is rejected.
+- A user without the permitted organisation role cannot import.
+
 ## Reports
 
 - Trial Balance includes all active chart accounts with zero balances and only includes posted journals through the as-of date.
@@ -51,4 +61,5 @@ Create two test organisations with independent users. In organisation A, create 
 - Retained-earnings / current-year-profit closing logic for a fully balanced Balance Sheet.
 - Cash-flow classification and indirect-method reconciliation.
 - Source-to-journal automation, reversals and tax-specific posting maps.
+- Cash-flow classification, opening balance imports and subledger-to-bank reconciliation.
 - Automated pgTAP/CI database tests and independent security review.
