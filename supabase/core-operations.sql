@@ -502,7 +502,11 @@ language plpgsql
 stable
 security invoker
 set search_path = ''
-as $$
+as $aurel$
+declare
+  fy_start_month smallint;
+  fy_start_year integer;
+  fy_start_date date;
 begin
   if not private.is_org_member(p_organization_id) then
     raise exception 'You are not a member of this organisation.';
@@ -511,39 +515,58 @@ begin
     raise exception 'An as-of date is required.';
   end if;
 
+  select c.financial_year_start_month into fy_start_month
+  from public.clients c
+  where c.id = p_client_id and c.organization_id = p_organization_id;
+  if fy_start_month is null then
+    raise exception 'The client does not belong to this organisation.';
+  end if;
+  fy_start_year := extract(year from p_as_of_date)::integer;
+  if extract(month from p_as_of_date)::integer < fy_start_month then
+    fy_start_year := fy_start_year - 1;
+  end if;
+  fy_start_date := make_date(fy_start_year, fy_start_month, 1);
+
   return query
   select
-    a.id,
-    a.account_code,
-    a.account_name,
-    a.account_group,
+    a.id, a.account_code, a.account_name, a.account_group,
     case
-      when a.account_group = 'asset'
-        then (coalesce(sum(l.debit_minor), 0) - coalesce(sum(l.credit_minor), 0))::bigint
-      else (coalesce(sum(l.credit_minor), 0) - coalesce(sum(l.debit_minor), 0))::bigint
-    end
+      when a.account_group = 'asset' then (coalesce(sum(l.debit_minor),0) - coalesce(sum(l.credit_minor),0))::bigint
+      else (coalesce(sum(l.credit_minor),0) - coalesce(sum(l.debit_minor),0))::bigint
+    end as balance_minor
   from public.accounts a
-  left join public.journal_lines l
-    on l.account_id = a.id
-   and l.organization_id = a.organization_id
-   and exists (
-     select 1
-     from public.journal_entries j
-     where j.id = l.journal_entry_id
-       and j.organization_id = l.organization_id
-       and j.lifecycle_status = 'posted'
-       and j.journal_date <= p_as_of_date
-   )
-  where a.organization_id = p_organization_id
-    and a.client_id = p_client_id
-    and a.account_group in ('asset','liability','equity')
+  left join public.journal_lines l on l.account_id = a.id and l.organization_id = a.organization_id
+    and exists (
+      select 1 from public.journal_entries j
+      where j.id = l.journal_entry_id and j.organization_id = l.organization_id
+        and j.client_id = p_client_id and j.lifecycle_status = 'posted' and j.journal_date <= p_as_of_date
+    )
+  where a.organization_id = p_organization_id and a.client_id = p_client_id
+    and a.is_active and a.account_group in ('asset','liability','equity')
   group by a.id, a.account_code, a.account_name, a.account_group
-  having coalesce(sum(l.debit_minor), 0) <> coalesce(sum(l.credit_minor), 0)
-  order by a.account_code;
+  having coalesce(sum(l.debit_minor),0) <> coalesce(sum(l.credit_minor),0)
+
+  union all
+
+  select
+    null::uuid, '3999'::text, 'Current Year Earnings'::text, 'equity'::text,
+    coalesce(sum(case
+      when a.account_group = 'income' then l.credit_minor - l.debit_minor
+      else l.credit_minor - l.debit_minor
+    end),0)::bigint as balance_minor
+  from public.accounts a
+  join public.journal_lines l on l.account_id = a.id and l.organization_id = a.organization_id
+  join public.journal_entries j on j.id = l.journal_entry_id and j.organization_id = l.organization_id
+  where a.organization_id = p_organization_id and a.client_id = p_client_id
+    and a.is_active and a.account_group in ('income','expense')
+    and j.lifecycle_status = 'posted' and j.journal_date between fy_start_date and p_as_of_date
+  having coalesce(sum(case
+    when a.account_group = 'income' then l.credit_minor - l.debit_minor
+    else l.credit_minor - l.debit_minor
+  end),0) <> 0
+  order by account_code;
 end;
-$$;
-
-
+$aurel$;
 create or replace function public.import_bank_statement_rows(
   p_organization_id uuid,
   p_client_id uuid,
