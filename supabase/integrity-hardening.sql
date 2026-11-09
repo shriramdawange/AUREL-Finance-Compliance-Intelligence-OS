@@ -46,7 +46,7 @@ returns trigger
 language plpgsql
 security invoker
 set search_path = ''
-as $
+as $aurel$
 begin
   if tg_op = 'INSERT' then
     if new.lifecycle_status <> 'draft' then
@@ -92,7 +92,7 @@ begin
 
   raise exception 'Invalid journal lifecycle transition: % -> %.', old.lifecycle_status, new.lifecycle_status;
 end;
-$;
+$aurel$;
 
 drop trigger if exists journal_entries_lifecycle_guard on public.journal_entries;
 create trigger journal_entries_lifecycle_guard
