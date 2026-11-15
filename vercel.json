@@ -1,0 +1,1 @@
+{"rewrites":[{"source":"/krushna","destination":"/index.html"},{"source":"/krushna/:path*","destination":"/index.html"}]}
