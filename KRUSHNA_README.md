@@ -39,7 +39,7 @@ Run checks with npm test and npm run build.
 
 ## Dedicated Supabase setup
 1. Create a separate Supabase project for Krushna. Do not reuse AUREL or another product database.
-2. Apply migrations in order: 202611150001_krushna.sql, then 202611150002_krushna_posting.sql.
+2. Apply migrations in order: 202611150001_krushna.sql, then 202611150002_krushna_posting.sql, 202611150003_krushna_hardening.sql and 202611150004_krushna_rls_hardening.sql.
 3. Review RLS, function privileges and schema with a security reviewer.
 4. Connect frontend authentication and data adapters before enabling cloud use.
 5. Never put a service-role key in browser environment variables.
