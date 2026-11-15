@@ -14,9 +14,9 @@ Krushna is the retail billing and inventory application area in this repository.
 - ITC workpaper register and manual reconciliation status.
 - TDS workpaper capture with user-entered section/rate and indicative calculation.
 - CSV exports for products, invoices, purchases, stock, ITC and TDS.
-- Browser localStorage persistence for the current browser profile.
+- Supabase-backed workspace loading and persistence for products, parties, sales invoices, purchases, stock movements, ITC/TDS workpapers and business profile. The authenticated business is the tenant scope.
 
-## Backend source added; not yet connected to a provisioned project
+## Supabase integration
 Dedicated Krushna PostgreSQL schema, RLS, memberships, roles, products, parties, invoice/purchase lines, stock movements, ITC, TDS and audit tables are in supabase/migrations. Transactional RPC source exists for invoice and purchase posting, plus a concurrency-safe invoice sequence allocator. These migrations must be deployed to a dedicated Supabase project and frontend auth/data operations must be connected before multi-user/cloud use. The current browser UI persists to localStorage only.
 
 ## Not implemented / not claimed
@@ -38,11 +38,10 @@ Open http://localhost:5173/ for AUREL and http://localhost:5173/krushna for Krus
 Run checks with npm test and npm run build.
 
 ## Dedicated Supabase setup
-1. Create a separate Supabase project for Krushna. Do not reuse AUREL or another product database.
-2. Apply migrations in order: 202611150001_krushna.sql, then 202611150002_krushna_posting.sql, 202611150003_krushna_hardening.sql and 202611150004_krushna_rls_hardening.sql.
-3. Review RLS, function privileges and schema with a security reviewer.
-4. Connect frontend authentication and data adapters before enabling cloud use.
-5. Never put a service-role key in browser environment variables.
+1. Dedicated project: `krushna-production` (Mumbai region).
+2. Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in local/preview environments.
+3. Never put a service-role key in browser environment variables.
+4. Complete authenticated browser tests for onboarding, product creation, purchase receiving, billing, reload persistence and tenant isolation before production use.
 
 ## Tax boundary
 The current UI calculates basic intra/inter-state GST from configured business and place-of-supply state. It is not a complete GST determination engine. Validate GSTINs, recipient disclosure thresholds, HSN/SAC, exempt/nil/non-GST supplies, composition scheme, exports/SEZ, reverse charge, cess, discounts, tax-inclusive pricing, credit/debit notes and all current notifications before production invoicing. IRN and signed QR must only be shown when returned by an authorised integration.
