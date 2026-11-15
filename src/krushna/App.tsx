@@ -1,6 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from "react";
 import {Activity,AlertTriangle,Barcode,Boxes,Building2,Calculator,Download,FileCheck2,FileText,LayoutDashboard,Package,Plus,Printer,Receipt,Search,Settings,ShoppingBag,ShoppingCart,Truck,Users,Wallet,X} from "lucide-react";
 import "./styles.css";
+import {calculateGst} from "./domain";
 type Product={id:string;name:string;sku:string;barcode:string;hsn:string;unit:string;rate:number;cost:number;gst:number;stock:number;reorder:number};
 type Party={id:string;name:string;gstin:string;phone:string;address:string;state:string};
 type Line={productId:string;name:string;hsn:string;qty:number;rate:number;gst:number;unit:string};
@@ -13,7 +14,7 @@ const blank:State={business:{name:"My Retail Store",gstin:"",address:"",state:"M
 const seed:State={...blank,products:[{id:"p1",name:"Aashirvaad Atta 5kg",sku:"GRO-001",barcode:"8901207001014",hsn:"11010000",unit:"Bag",rate:280,cost:238,gst:5,stock:48,reorder:10},{id:"p2",name:"Tata Salt 1kg",sku:"GRO-002",barcode:"8904043900016",hsn:"25010010",unit:"Pack",rate:28,cost:21,gst:0,stock:120,reorder:20},{id:"p3",name:"Toor Dal 1kg",sku:"GRO-003",barcode:"8906001234567",hsn:"07136000",unit:"Kg",rate:145,cost:122,gst:5,stock:36,reorder:8}],customers:[{id:"c1",name:"Walk-in Customer",gstin:"",phone:"",address:"",state:"Maharashtra"}],suppliers:[{id:"s1",name:"Shree Wholesale Mart",gstin:"",phone:"",address:"",state:"Maharashtra"}]};
 const read=():State=>{try{const s=JSON.parse(localStorage.getItem(KEY)||"null");return s||seed}catch{return seed}};
 const csv=(name:string,rows:any[])=>{const cols=Object.keys(rows[0]||{}),body=[cols.join(","),...rows.map(r=>cols.map(k=>JSON.stringify(r[k]??"")).join(","))].join("\n"),a=document.createElement("a");a.href=URL.createObjectURL(new Blob([body],{type:"text/csv"}));a.download=name;a.click();URL.revokeObjectURL(a.href)};
-const gstTotals=(lines:Line[],home:string,place:string)=>{const taxable=lines.reduce((s,l)=>s+l.qty*l.rate,0),tax=lines.reduce((s,l)=>s+l.qty*l.rate*l.gst/100,0),inter=home!==place;return {taxable,cgst:inter?0:tax/2,sgst:inter?0:tax/2,igst:inter?tax:0,total:taxable+tax}};
+const gstTotals=(lines:Line[],home:string,place:string)=>{const x=calculateGst(lines.map(l=>({quantity:l.qty,unitPrice:l.rate,gstRate:l.gst})),home===place);return {taxable:x.taxablePaise/100,cgst:x.cgstPaise/100,sgst:x.sgstPaise/100,igst:x.igstPaise/100,total:x.totalPaise/100}};
 const ean=()=>{const b=Array.from({length:12},()=>Math.floor(Math.random()*10)).join("");const n=b.split("").reduce((s,c,i)=>s+Number(c)*(i%2?3:1),0);return b+((10-n%10)%10)};
 const nav:any=[["Overview","overview",LayoutDashboard],["POS Billing","pos",ShoppingCart],["Products","products",Package],["Inventory","inventory",Boxes],["Purchases","purchases",ShoppingBag],["Invoices","invoices",Receipt],["Customers","customers",Users],["Suppliers","suppliers",Truck],["GST & ITC","gst",FileCheck2],["TDS","tds",Calculator],["Reports","reports",Activity],["Settings","settings",Settings]];
 export default function KrushnaApp(){
