@@ -25,7 +25,7 @@ export async function loadWorkspace(businessId:string){
  return {products:products.data||[],parties:parties.data||[],invoices:invoices.data||[],purchases:purchases.data||[],moves:moves.data||[],itc:itc.data||[],tds:tds.data||[]};
 }
 export async function saveProduct(businessId:string,p:Partial<KrushnaProductRow>){
- const {data,error}=await db().from("krushna_products").upsert({business_id:businessId,name:p.name,sku:p.sku,barcode:p.barcode||null,hsn_sac:p.hsn_sac||null,unit:p.unit||"Nos",selling_price:p.selling_price||0,purchase_cost:p.purchase_cost||0,gst_rate:p.gst_rate||0,stock_qty:p.stock_qty||0,reorder_level:p.reorder_level||0,...(p.id?{id:p.id}:{})},{onConflict:"business_id,sku"}).select().single();
+ const {data,error}=await db().from("krushna_products").upsert({business_id:businessId,name:p.name,sku:p.sku,barcode:p.barcode||null,hsn_sac:p.hsn_sac||null,unit:p.unit||"Nos",selling_price:p.selling_price||0,purchase_cost:p.purchase_cost||0,gst_rate:p.gst_rate||0,stock_qty:p.stock_qty??0,reorder_level:p.reorder_level||0,...(p.id?{id:p.id}:{})},{onConflict:"business_id,sku"}).select().single();
  if(error)throw error;return data as KrushnaProductRow;
 }
 export async function saveParty(businessId:string,p:Partial<KrushnaPartyRow>){
@@ -40,4 +40,17 @@ export async function postInvoice(input:{businessId:string;stateCode:string;plac
 export async function postPurchase(input:{businessId:string;supplierId:string|null;supplierName:string;invoiceNo:string;date:string;lines:{product_id:string;quantity:number;unit_cost:number}[]}){
  const {data,error}=await db().rpc("krushna_post_purchase",{p_business_id:input.businessId,p_supplier_id:input.supplierId,p_supplier_name:input.supplierName,p_supplier_invoice_no:input.invoiceNo,p_invoice_date:input.date,p_lines:input.lines});
  if(error)throw error;return data as string;
+}
+
+export async function saveItcRecord(businessId:string,input:{party:string;ref:string;date:string;taxable:number;tax:number;status:string}) {
+ const {data,error}=await db().from("krushna_itc_records").insert({business_id:businessId,supplier_name:input.party,supplier_invoice_no:input.ref,invoice_date:input.date,taxable_value:input.taxable,cgst:0,sgst:0,igst:input.tax,source:"manual",reconciliation_status:input.status.toLowerCase().replaceAll(" ","_")}).select().single();
+ if(error)throw error;return data;
+}
+export async function saveTdsRecord(businessId:string,input:{party:string;pan:string;section:string;date:string;base:number;rate:number}) {
+ const {data,error}=await db().from("krushna_tds_records").insert({business_id:businessId,payee_name:input.party,payee_pan:input.pan||null,section:input.section,payment_date:input.date,base_amount:input.base,rate:input.rate,tds_amount:Math.round(input.base*input.rate)/100,certificate_status:"review"}).select().single();
+ if(error)throw error;return data;
+}
+export async function updateBusiness(businessId:string,input:{name:string;gstin:string;address:string;state:string}) {
+ const {error}=await db().from("krushna_businesses").update({trade_name:input.name,legal_name:input.name,gstin:input.gstin||null,address:input.address,state_name:input.state,state_code:STATE_CODES[input.state]||"27"}).eq("id",businessId);
+ if(error)throw error;
 }
