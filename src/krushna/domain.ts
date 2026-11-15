@@ -1,0 +1,8 @@
+export type TaxLine={quantity:number;unitPrice:number;discount?:number;gstRate:number};
+export type TaxBreakdown={taxablePaise:number;cgstPaise:number;sgstPaise:number;igstPaise:number;totalPaise:number};
+export const toPaise=(n:number)=>Math.round((Number.isFinite(n)?n:0)*100);
+export function calculateGst(lines:TaxLine[],sameState:boolean):TaxBreakdown{let taxablePaise=0,cgstPaise=0,sgstPaise=0,igstPaise=0;for(const l of lines){if(l.quantity<=0||l.unitPrice<0||l.gstRate<0||l.gstRate>100)throw new Error('Invalid tax line');const base=Math.max(0,toPaise(l.quantity*l.unitPrice-(l.discount||0)));const tax=Math.round(base*l.gstRate/100);taxablePaise+=base;if(sameState){const cgst=Math.round(tax/2);cgstPaise+=cgst;sgstPaise+=tax-cgst}else igstPaise+=tax}return{taxablePaise,cgstPaise,sgstPaise,igstPaise,totalPaise:taxablePaise+cgstPaise+sgstPaise+igstPaise}}
+export function ean13CheckDigit(s:string){if(!/^\d{12}$/.test(s))throw new Error('EAN-13 requires 12 digits');const sum=[...s].reduce((n,c,i)=>n+Number(c)*(i%2?3:1),0);return(10-sum%10)%10}
+export function isValidEan13(s:string){return /^\d{13}$/.test(s)&&ean13CheckDigit(s.slice(0,12))===Number(s[12])}
+export function financialYear(d:Date){const y=d.getFullYear(),start=d.getMonth()>=3?y:y-1;return String(start)+'-'+String(start+1).slice(-2)}
+export function invoiceSerial(fy:string,n:number){const m=fy.match(/^(\d{4})-(\d{2})$/);if(!m||n<1||!Number.isInteger(n))throw new Error('Invalid FY or sequence');const s='KRU/'+m[1].slice(-2)+'-'+m[2]+'/'+String(n).padStart(4,'0');if(s.length>16)throw new Error('Invoice serial exceeds 16 characters');return s}
