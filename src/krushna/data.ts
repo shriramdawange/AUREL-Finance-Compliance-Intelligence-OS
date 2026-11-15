@@ -43,7 +43,7 @@ export async function postPurchase(input:{businessId:string;supplierId:string|nu
 }
 
 export async function saveItcRecord(businessId:string,input:{party:string;ref:string;date:string;taxable:number;tax:number;status:string}) {
- const {data,error}=await db().from("krushna_itc_records").insert({business_id:businessId,supplier_name:input.party,supplier_invoice_no:input.ref,invoice_date:input.date,taxable_value:input.taxable,cgst:0,sgst:0,igst:input.tax,source:"manual",reconciliation_status:input.status.toLowerCase().replaceAll(" ","_")}).select().single();
+ const {data,error}=await db().from("krushna_itc_records").insert({business_id:businessId,supplier_name:input.party,supplier_invoice_no:input.ref,invoice_date:input.date,taxable_value:input.taxable,cgst:0,sgst:0,igst:input.tax,source:"manual",reconciliation_status:input.status.toLowerCase().replace(/ /g,"_")}).select().single();
  if(error)throw error;return data;
 }
 export async function saveTdsRecord(businessId:string,input:{party:string;pan:string;section:string;date:string;base:number;rate:number}) {
